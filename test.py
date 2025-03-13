@@ -1,13 +1,18 @@
 import os
-
 import ffmpeg_converter
-
-os.environ["PYTHONUTF8"] = "1"
-
-# import code
 from pathlib import Path
 
-file = r"F:\Users\user\Downloads\IMG_2078.mp4"
+os.environ["PYTHONUTF8"] = "1"
+# Get the absolute path of the current file
+current_file_path = Path(__file__).resolve()
+# Set the ./bin path to the PATH environment variable
+bin_path = current_file_path.parent / "bin"
+os.environ["PATH"] = a = str(bin_path) + os.pathsep + os.environ["PATH"]
+
+
+# import code
+
+file = r"C:\Users\user\Downloads\IMG_2078.mp4"
 dir = Path(r"F:\Users\user\Downloads\新增資料夾")
 # multiple = 4.1
 # ffmpeg_converter.speedup(file, multiple=multiple)
@@ -33,3 +38,18 @@ cut_silence_args = {
 }
 
 ffmpeg_converter.cut_silence(**cut_silence_args)
+
+li = [
+    "ffprobe",
+    "-hwaccel",
+    "auto",
+    "-i",
+    "C:\\Users\\user\\Downloads\\IMG_2078.mp4",
+    "-af",
+    "silencedetect=n=-21dB:d=0.2",
+    "-c:v",
+    "copy",
+    "-f",
+    "null",
+    "-",
+]
