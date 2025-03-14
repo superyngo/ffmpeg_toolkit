@@ -1,5 +1,5 @@
 # import ffmpeg
-from typing import Iterable, Sequence, Optional, Callable, Literal
+from typing import Iterable, Sequence, Optional, Callable, Literal, Mapping, TypedDict
 from pathlib import Path
 from enum import StrEnum, auto
 from collections import deque
@@ -15,6 +15,7 @@ import json
 from ffmpeg_types import EncodeKwargs, VideoSuffix
 import functools
 from pydantic import BaseModel, Field
+import shutil
 
 
 class FrozenBaseModel(BaseModel):
@@ -72,7 +73,13 @@ class _tasks(StrEnum):
 
 
 # basic
-type FF_Kwargs = dict[str, Path | str | float]
+type FF_Kwargs = (
+    dict[str, Path]
+    | dict[str, str]
+    | dict[str, int]
+    | dict[str, float]
+    | dict[str, Path | float | str | int]
+)
 
 
 def _create_ff_kwargs(
@@ -84,10 +91,10 @@ def _create_ff_kwargs(
     input_kwargs_default: FF_Kwargs = {"hwaccel": "auto"}
     output_kwargs_default: FF_Kwargs = {"loglevel": "warning"}
 
-    input_file_kwargs: dict[Literal["i"], Path] = {"i": input_file}
+    input_file_kwargs: Mapping[Literal["i"], Path] = {"i": input_file}
     # Handle file path
     if output_file == Path:
-        output_file_kwargs: dict[Literal["y"], Path] = {}
+        output_file_kwargs: Mapping[Literal["y"], Path] = {}
     else:
         output_file_kwargs = {"y": output_file}
     ff_kwargs: FF_Kwargs = (
@@ -126,7 +133,7 @@ def _dic_to_ffmpeg_kwargs(kwargs: dict | None = None) -> list[str]:
     for k, v in kwargs.items():
         args.append(arg_map.get(k, f"-{k}"))
         if v != "":
-            args.append(str(v))
+            args.append(f"{v}")
     return args
 
 
@@ -134,10 +141,15 @@ def _dic_to_ffmpeg_kwargs(kwargs: dict | None = None) -> list[str]:
 def _ffmpeg(**ffkwargs) -> str:
     logger.info(f"Executing FFmpeg with {ffkwargs = }")
     command = ["ffmpeg"] + _dic_to_ffmpeg_kwargs(ffkwargs)
-    result = subprocess.run(
-        command, capture_output=True, text=True, check=True, encoding="utf-8"
-    )
-    return result.stdout + result.stderr
+    logger.info(f"command: {' '.join(command)}")
+    try:
+        result = subprocess.run(
+            command, capture_output=True, text=True, check=True, encoding="utf-8"
+        )
+        return result.stdout + result.stderr
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Failed to execute FFmpeg. Error: {e}")
+        raise e
 
 
 def _ffprobe(**ffkwargs):
@@ -263,6 +275,11 @@ def _probe_keyframe(input_file: Path, **othertags) -> list[float]:  # command
 
 
 # converting core
+class FF_Render_Exception(TypedDict):
+    code: int
+    meaasge: str
+
+
 class FF_Kwargs_In(BaseModel):
     input_file: Path | str = Path()
     output_file: Optional[Path | str] = None
@@ -272,23 +289,101 @@ class FF_Kwargs_In(BaseModel):
 
 class FF_Render_In(FF_Kwargs_In):
     task_descripton: Optional[str] = "render"
+    exception: Optional[FF_Render_Exception] = None
 
 
-class FF_Render_Tasks_in(FF_Render_In):
-    def gen_cut_kwargs(
+class FF_Render_Tasks(FF_Render_In):
+    def custom(
+        self,
+        input_file: Path | str,
+        output_file: Optional[Path | str] = None,
+        **othertags,
+    ) -> FF_Render_In:
+        self.input_file = input_file
+        self.output_file = output_file
+        self.output_kwargs = othertags
+        return self
+
+    def cut(
         self,
         input_file: Path | str,
         output_file: Optional[Path | str] = None,
         ss: str = "00:00:00",
         to: str = "00:00:01",
+        rerender: bool = False,
+        **othertags,
     ) -> FF_Render_In:
         self.task_descripton = f"{_tasks.CUT}_{_convert_timestamp_to_seconds(ss)}-{_convert_timestamp_to_seconds(to)}"
         self.input_file = input_file
         self.output_file = output_file
-        self.output_kwargs = {
-            "ss": ss,
-            "to": to,
-        }
+        self.output_kwargs = (
+            {
+                "ss": ss,
+                "to": to,
+            }
+            | ({} if rerender else {"cv": "copy", "ca": "copy"})
+            | othertags
+        )
+        return self
+
+    def speedup(
+        self,
+        input_file: Path | str,
+        output_file: Optional[Path | str] = None,
+        multiple: float | int = 2,
+        **othertags,
+    ) -> FF_Render_In:
+        self.task_descripton = f"{_tasks.SPEEDUP}_by_{multiple}"
+        self.input_file = input_file
+        self.output_file = output_file
+        self.output_kwargs = _create_speedup_kwargs(multiple) | othertags
+
+        # error handling
+        if multiple == 1:
+            if input_file != output_file:
+                self.exception = {
+                    "code": 0,
+                    "meaasge": "Speedup multiple 1, only replace target file",
+                }
+
+        if multiple <= 0:
+            self.exception = {
+                "code": 1,
+                "meaasge": "Speedup factor must be greater than 0.",
+            }
+
+        return self
+
+    def jumpcut(
+        self,
+        input_file: Path | str,
+        output_file: Path | None = None,
+        b1_duration: float = 5,
+        b2_duration: float = 5,
+        b1_multiple: float = 1,  # 0 means remove this part
+        b2_multiple: float = 0,  # 0 means remove this part
+        **othertags,
+    ) -> FF_Render_In:
+        self.task_descripton = f"{_tasks.JUMPCUT}_b1({b1_duration}x{b1_multiple})_b2({b2_duration}x{b2_multiple})"
+        self.input_file = input_file
+        self.output_file = output_file
+        self.output_kwargs = (
+            _create_jumpcut_kwargs(b1_duration, b2_duration, b1_multiple, b2_multiple)
+            | othertags
+        )
+        # error handling
+        if any((b1_duration <= 0, b2_duration <= 0)):
+            self.exception = {
+                "code": 1,
+                "meaasge": "Both parts' durations must be greater than 0.",
+            }
+
+        if any((b1_multiple < 0, b2_multiple < 0)):
+            self.exception = {
+                "code": 2,
+                "meaasge": "Both multiples must be greater or equal to 0 (0 means remove).",
+            }
+
         return self
 
 
@@ -298,7 +393,8 @@ def ff_render(
     task_descripton: _tasks | str,
     input_kwargs: FF_Kwargs,
     output_kwargs: FF_Kwargs,
-) -> str:  # command
+    exception: Optional[FF_Render_Exception],
+) -> str | int:  # command
     """Executeing ffmpeg with given args for different tasks
 
     Args:
@@ -313,6 +409,7 @@ def ff_render(
     Returns:
         int: _description_
     """
+
     input_file = Path(input_file)
 
     # Handle output file path
@@ -335,6 +432,16 @@ def ff_render(
         temp_output_file: Path = output_file.parent / (
             output_file.stem + "_processing" + output_file.suffix
         )
+
+    # Exception hadling
+    if exception is not None:
+        match exception["code"]:
+            case 0:
+                shutil.copyfile(input_file, output_file)
+            case _:
+                pass
+        logger.error(exception["meaasge"])
+        return exception["code"]
 
     # Generate ff kwargs in
     ff_kwargs_in: FF_Kwargs_In = FF_Kwargs_In(
@@ -362,18 +469,14 @@ def ff_render(
         raise e
 
 
-# ff_render: cut
-def cut(  # command
-    input_file: Path | str,
+# ff_render
+def render(  # command
+    Render_Tasks: FF_Render_In,
 ) -> int:
-    ff_cut_kwargs_In: FF_Render_In = FF_Render_Tasks_in().gen_cut_kwargs(
-        input_file=input_file,
-    )
-
     try:
-        ff_render(**ff_cut_kwargs_In.model_dump())
+        ff_render(**Render_Tasks.model_dump())
     except Exception as e:
-        logger.error(f"Failed to {task_descripton} videos for {input_file}. Error: {e}")
+        logger.error(f"Error: {e}")
         raise e
     return 0
 
@@ -411,56 +514,6 @@ def _create_speedup_kwargs(multiple: float) -> dict[str, str]:
         }
         | _create_force_keyframes_kwargs()
     )
-
-
-def speedup(  # command
-    input_file: Path | str,
-    output_file: Optional[Path] = None,
-    multiple: float | int = 2,
-    **othertags: FF_Kwargs,
-) -> int:
-    """_summary_
-
-    Args:
-        output_file (Path | None, optional): _description_. Defaults to None.
-        multiple (float | int, optional): _description_. Defaults to 2.
-
-    Raises:
-        e: _description_
-
-    Returns:
-        int: _description_
-    """
-    # init task
-    task_descripton = f"{_tasks.SPEEDUP}_by_{multiple}"
-    input_file = Path(input_file)
-
-    # error handling
-    if multiple <= 0:
-        logger.error("Speedup factor must be greater than 0.")
-        return 1
-
-    if multiple == 1:
-        if input_file != output_file and output_file is not None:
-            input_file.replace(output_file)
-        logger.error("Speedup multiple 1, only replace target file")
-        return 0
-
-    output_kwargs: FF_Render_In = {
-        "input_file": input_file,
-        "output_file": output_file,
-        "task_name": task_descripton,
-        "othertags": _create_speedup_kwargs(multiple) | othertags,
-    }
-
-    try:
-        ff_render(**output_kwargs)
-    except Exception as e:
-        logger.error(
-            f"Failed to {task_descripton} videos for {input_file}. Error: {str(e)}"
-        )
-        raise e
-    return 0
 
 
 # ff_render: jumpcut
@@ -670,14 +723,21 @@ def advanced_keep_or_remove_by_cuts(
             start_time: str = video_segments[i]  # type:ignore
             end_time: str = video_segments[i + 1]  # type:ignore
             if start_time[:8] == end_time[:8]:
+                logger.info(
+                    f"Sagment is too short to cut, skipping {start_time} ot {end_time}"
+                )
                 continue
             seg_output_file = temp_dir / f"{i}{input_file.suffix}"
             cut_videos.append(seg_output_file)
+            ff_cut_kwargs: FF_Render_In = FF_Render_Tasks().cut(
+                input_file=input_file,
+                output_file=seg_output_file,
+                ss=start_time,
+                to=end_time,
+            )
 
             # Submit the cut task to the executor
-            future = executor.submit(
-                cut, input_file, seg_output_file, start_time, end_time
-            )
+            future = executor.submit(render, ff_cut_kwargs)
             futures.append(future)  # Store the future for tracking
             future.result()  # Ensures `cut` completes before proceeding
 
@@ -686,14 +746,14 @@ def advanced_keep_or_remove_by_cuts(
             if not further_kwargs:
                 continue
 
-            output_kwargs: FF_Render_In = {
-                "input_file": seg_output_file,
-                "output_file": seg_output_file,
-                "othertags": further_kwargs,
-            }
+            ff_custom_kwargs: FF_Render_In = FF_Render_Tasks().custom(
+                input_file=seg_output_file,
+                output_file=seg_output_file,
+                **further_kwargs,
+            )
 
             # Submit further render task to the executor
-            future = executor.submit(ff_render, **output_kwargs)
+            future = executor.submit(ff_render, ff_custom_kwargs)
             futures.append(future)  # Store the future for tracking
             future.result()
 

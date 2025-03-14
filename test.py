@@ -25,12 +25,15 @@ dir = Path(r"F:\Users\user\Downloads\新增資料夾")
 # }
 # ffmpeg_converter.jumpcut(**jumpcut_args)
 
-ff_cut_kwargs_In: ffmpeg_converter.FF_Render_In = (
-    ffmpeg_converter.FF_Render_Tasks_in().gen_cut_kwargs(
-        input_file=file,
-    )
+# ff_cut_kwargs_In: ffmpeg_converter.FF_Render_In = (
+#     ffmpeg_converter.FF_Render_Tasks().cut(input_file=file, to="00:00:10")
+# )
+# ffmpeg_converter.cut(ff_cut_kwargs_In)
+
+ff_kwargs: ffmpeg_converter.FF_Render_In = ffmpeg_converter.FF_Render_Tasks().jumpcut(
+    input_file=file, b1_duration=0.5
 )
-ffmpeg_converter.ff_render(**ff_cut_kwargs_In.model_dump())
+ffmpeg_converter.render(ff_kwargs)
 
 # ffmpeg_converter.cut_silence_rerender(file)
 
