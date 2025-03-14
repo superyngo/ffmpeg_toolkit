@@ -1,13 +1,5 @@
 # import ffmpeg
-from typing import (
-    Iterable,
-    Sequence,
-    TypedDict,
-    Optional,
-    Callable,
-    NotRequired,
-    Required,
-)
+from typing import Iterable, Sequence, Optional, Callable, Literal
 from pathlib import Path
 from enum import StrEnum, auto
 from collections import deque
@@ -20,11 +12,14 @@ import time
 import os
 import concurrent.futures
 import json
-
-from attr import asdict
 from ffmpeg_types import EncodeKwargs, VideoSuffix
 import functools
-from dataclasses import dataclass, field
+from pydantic import BaseModel, Field
+
+
+class FrozenBaseModel(BaseModel):
+    class Config:
+        frozen = True
 
 
 # from app.common import logger
@@ -71,13 +66,43 @@ class _tasks(StrEnum):
     PROBE_ENCODING = auto()
     PROBE_DURATION = auto()
     PROBE_IS_VALID_VIDEO = auto()
-    GET_NON_SILENCE_SEGS = auto()
-    CUT_SILENCE = auto()
-    CUT_SILENCE_RERENDER = auto()
+    GENON_SILENCE_SEGS = auto()
+    CUSILENCE = auto()
+    CUSILENCE_RERENDER = auto()
 
 
 # basic
-def _dic_to_ffmpeg_args(kwargs: dict | None = None) -> list:
+type FF_Kwargs = dict[str, Path | str | float]
+
+
+def _create_ff_kwargs(
+    input_file: Path,
+    output_file: Path,
+    input_kwargs: FF_Kwargs,
+    output_kwargs: FF_Kwargs,
+) -> FF_Kwargs:
+    input_kwargs_default: FF_Kwargs = {"hwaccel": "auto"}
+    output_kwargs_default: FF_Kwargs = {"loglevel": "warning"}
+
+    input_file_kwargs: dict[Literal["i"], Path] = {"i": input_file}
+    # Handle file path
+    if output_file == Path:
+        output_file_kwargs: dict[Literal["y"], Path] = {}
+    else:
+        output_file_kwargs = {"y": output_file}
+    ff_kwargs: FF_Kwargs = (
+        input_kwargs_default
+        | input_kwargs
+        | input_file_kwargs
+        | output_kwargs_default
+        | output_kwargs
+        | output_file_kwargs
+    )
+
+    return ff_kwargs
+
+
+def _dic_to_ffmpeg_kwargs(kwargs: dict | None = None) -> list[str]:
     """Create ffmpeg args to be executed in subprocess
 
     Args:
@@ -101,28 +126,23 @@ def _dic_to_ffmpeg_args(kwargs: dict | None = None) -> list:
     for k, v in kwargs.items():
         args.append(arg_map.get(k, f"-{k}"))
         if v != "":
-            args.append(f"{v}")
+            args.append(str(v))
     return args
 
 
 @timing
-def _ffmpeg(**kwargs) -> str:
-    front_default_kwargs = {"hwaccel": "auto"}
-    behind_default_kwargs = {"loglevel": "warning"}
-    output_kwargs: dict = front_default_kwargs | kwargs | behind_default_kwargs
-    logger.info(f"Executing FFmpeg with {output_kwargs = }")
-    command = ["ffmpeg"] + _dic_to_ffmpeg_args(output_kwargs)
+def _ffmpeg(**ffkwargs) -> str:
+    logger.info(f"Executing FFmpeg with {ffkwargs = }")
+    command = ["ffmpeg"] + _dic_to_ffmpeg_kwargs(ffkwargs)
     result = subprocess.run(
         command, capture_output=True, text=True, check=True, encoding="utf-8"
     )
     return result.stdout + result.stderr
 
 
-def _ffprobe(**kwargs):
-    default_kwargs = {}
-    output_kwargs: dict = kwargs | default_kwargs
-    logger.info(f"Executing ffprobe with {output_kwargs = }")
-    command = ["ffprobe"] + _dic_to_ffmpeg_args(output_kwargs)
+def _ffprobe(**ffkwargs):
+    logger.info(f"Executing ffprobe with {ffkwargs = }")
+    command = ["ffprobe"] + _dic_to_ffmpeg_kwargs(ffkwargs)
     subprocess.run(command, check=True, encoding="utf-8")
 
 
@@ -137,7 +157,7 @@ def probe_is_valid_video(input_file: Path, **othertags) -> bool:  # command
     } | othertags
     logger.info(f"Validating {input_file.name} with {output_kwargs = }")
     try:
-        command = ["ffprobe"] + _dic_to_ffmpeg_args(output_kwargs)
+        command = ["ffprobe"] + _dic_to_ffmpeg_kwargs(output_kwargs)
         result = subprocess.run(
             command, capture_output=True, text=True, check=True, encoding="utf-8"
         ).stdout.strip()
@@ -163,7 +183,7 @@ def probe_duration(input_file: Path, **othertags) -> float:  # command
         "i": input_file,
     } | othertags
     logger.info(f"Probing {input_file.name} duration with {output_kwargs = }")
-    command = ["ffprobe"] + _dic_to_ffmpeg_args(output_kwargs)
+    command = ["ffprobe"] + _dic_to_ffmpeg_kwargs(output_kwargs)
     result = subprocess.run(
         command, capture_output=True, text=True, check=True, encoding="utf-8"
     )
@@ -183,7 +203,7 @@ def probe_encoding(input_file: Path, **othertags) -> EncodeKwargs:  # command
     } | othertags
     logger.info(f"Probing {input_file.name} encoding with {output_kwargs = }")
     # Probe the video file to get metadata
-    command = ["ffprobe"] + _dic_to_ffmpeg_args(output_kwargs)
+    command = ["ffprobe"] + _dic_to_ffmpeg_kwargs(output_kwargs)
     result = subprocess.run(
         command, capture_output=True, text=True, check=True, encoding="utf-8"
     )
@@ -229,7 +249,7 @@ def _probe_keyframe(input_file: Path, **othertags) -> list[float]:  # command
         "i": input_file,
     } | othertags
     logger.info(f"Getting keyframe for {input_file.name} with {output_kwargs = }")
-    command = ["ffprobe"] + _dic_to_ffmpeg_args(output_kwargs)
+    command = ["ffprobe"] + _dic_to_ffmpeg_kwargs(output_kwargs)
     result = subprocess.run(
         command, capture_output=True, text=True, check=True, encoding="utf-8"
     )
@@ -243,63 +263,41 @@ def _probe_keyframe(input_file: Path, **othertags) -> list[float]:  # command
 
 
 # converting core
-type T_Othertags = dict
+class FF_Kwargs_In(BaseModel):
+    input_file: Path | str = Path()
+    output_file: Optional[Path | str] = None
+    input_kwargs: FF_Kwargs = Field(default_factory=dict)
+    output_kwargs: FF_Kwargs = Field(default_factory=dict)
 
 
-@dataclass(frozen=True)
-class T_Cut_Output_args:
-    start_time: str = "00:00:00"
-    end_time: str = "00:00:01"
-    ca: str = "copy"
-    cv: str = "copy"
+class FF_Render_In(FF_Kwargs_In):
+    task_descripton: Optional[str] = "render"
 
 
-@dataclass(frozen=True)
-class T_FF_Args_In:
-    input_file: Path
-    output_file: Optional[Path] = None
-    input_tags: T_Othertags = field(default_factory=dict)
-    output_tags: T_Othertags | T_Cut_Output_args = field(default_factory=dict)
-
-
-type T_FF_Args_Out = dict[str, Path | str | float]
-
-
-@dataclass(frozen=True)
-class T_FF_Render_Args(T_FF_Args_In):
-    task_descripton: Optional[_tasks | str] = "rendered"
-
-
-def _create_ff_args(
-    input_file: Path,
-    output_file: Path,
-    input_tags: T_Othertags,
-    output_tags: T_Othertags,
-) -> T_FF_Args_Out:
-    """Create args for converting by ffmpeg
-
-    Args:
-        input_file (Path): _description_
-        output_file (Path): _description_
-
-    Returns:
-        Mapping[str, str | Path]: _description_
-    """
-    if output_file == Path():
-        output_file_tags: dict = {}
-    else:
-        output_file_tags = {"y": output_file}
-    input_tags = asdict(input_tags)
-    output_tags = asdict(output_tags)
-    return input_tags | {"i": input_file} | output_tags | output_file_tags
+class FF_Render_Tasks_in(FF_Render_In):
+    def gen_cut_kwargs(
+        self,
+        input_file: Path | str,
+        output_file: Optional[Path | str] = None,
+        ss: str = "00:00:00",
+        to: str = "00:00:01",
+    ) -> FF_Render_In:
+        self.task_descripton = f"{_tasks.CUT}_{_convert_timestamp_to_seconds(ss)}-{_convert_timestamp_to_seconds(to)}"
+        self.input_file = input_file
+        self.output_file = output_file
+        self.output_kwargs = {
+            "ss": ss,
+            "to": to,
+        }
+        return self
 
 
 def ff_render(
-    input_file: Path,
-    output_file: Optional[Path],
+    input_file: Path | str,
+    output_file: Optional[Path | str],
     task_descripton: _tasks | str,
-    input_tags: T_Othertags,
-    output_tags: T_Othertags,
+    input_kwargs: FF_Kwargs,
+    output_kwargs: FF_Kwargs,
 ) -> str:  # command
     """Executeing ffmpeg with given args for different tasks
 
@@ -315,6 +313,7 @@ def ff_render(
     Returns:
         int: _description_
     """
+    input_file = Path(input_file)
 
     # Handle output file path
     if output_file is None:
@@ -326,6 +325,8 @@ def ff_render(
                 else '.' + VideoSuffix.MKV
             }"
         )
+    else:
+        output_file = Path(output_file)
 
     # Handle temp output file path
     if output_file == Path():
@@ -334,21 +335,23 @@ def ff_render(
         temp_output_file: Path = output_file.parent / (
             output_file.stem + "_processing" + output_file.suffix
         )
-    ff_args_in: T_FF_Args_In = T_FF_Args_In(
+
+    # Generate ff kwargs in
+    ff_kwargs_in: FF_Kwargs_In = FF_Kwargs_In(
         input_file=input_file,
         output_file=temp_output_file,
-        input_tags=input_tags,
-        output_tags=output_tags,
+        input_kwargs=input_kwargs,
+        output_kwargs=output_kwargs,
     )
 
-    ff_args_out: T_FF_Args_Out = _create_ff_args(**asdict(ff_args_in))
+    ff_kwargs_out: FF_Kwargs = _create_ff_kwargs(**ff_kwargs_in.model_dump())
 
     logger.info(
-        f"{task_descripton.capitalize()} {input_file.name} to {output_file.name} with {ff_args_out}"
+        f"{task_descripton.capitalize()} {input_file.name} to {output_file.name} with {ff_kwargs_out}"
     )
 
     try:
-        result: str = _ffmpeg(**ff_args_out)
+        result: str = _ffmpeg(**ff_kwargs_out)
         if temp_output_file != output_file:
             temp_output_file.replace(output_file)
         return result
@@ -360,49 +363,15 @@ def ff_render(
 
 
 # ff_render: cut
-def _create_cut_args(start_time: str, end_time: str) -> dict[str, str]:
-    return {
-        "ss": start_time,
-        "to": end_time,
-    }
-
-
-@dataclass(frozen=True)
-class T_Cut_Args(T_FF_Render_Args):
-    task_descripton = _tasks.CUT
-    output_tags: T_Cut_Output_args = field(default_factory=T_Cut_Output_args)
-
-
 def cut(  # command
     input_file: Path | str,
-    output_file: Path | None = None,
-    start_time: str = "00:00:00",
-    end_time: str = "00:00:01",
-    rerender: bool = False,
-    **othertags: EncodeKwargs,
 ) -> int:
-    """Cut a video file using ffmpeg-python.
-
-    Raises:
-        e: _description_
-
-    Returns:
-        _type_: _description_
-    """
-
-    # init task
-    task_descripton = f"{_tasks.CUT}_from_{_convert_timestamp_to_seconds(start_time)}_to_{_convert_timestamp_to_seconds(end_time)}"
-    input_file = Path(input_file)
-
-    ff_render_args: T_Cut_Args = T_Cut_Args(
+    ff_cut_kwargs_In: FF_Render_In = FF_Render_Tasks_in().gen_cut_kwargs(
         input_file=input_file,
-        output_file=output_file,
-        task_descripton=task_descripton,
-        output_tags=T_Cut_Output_args(start_time, end_time),
     )
 
     try:
-        ff_render(**asdict(ff_render_args))
+        ff_render(**ff_cut_kwargs_In.model_dump())
     except Exception as e:
         logger.error(f"Failed to {task_descripton} videos for {input_file}. Error: {e}")
         raise e
@@ -410,7 +379,7 @@ def cut(  # command
 
 
 # ff_render: sppedup
-def _create_force_keyframes_args(keyframe_times: int = 2) -> dict[str, str]:
+def _create_force_keyframes_kwargs(keyframe_times: int = 2) -> dict[str, str]:
     """_summary_
 
     Args:
@@ -422,7 +391,7 @@ def _create_force_keyframes_args(keyframe_times: int = 2) -> dict[str, str]:
     return {"force_key_frames": f"expr:gte(t,n_forced*{keyframe_times})"}
 
 
-def _create_speedup_args(multiple: float) -> dict[str, str]:
+def _create_speedup_kwargs(multiple: float) -> dict[str, str]:
     SPEEDUP_task_THRESHOLD: int = 5
     vf: str
     af: str
@@ -440,7 +409,7 @@ def _create_speedup_args(multiple: float) -> dict[str, str]:
             "fps_mode": "vfr",
             "async": 1,
         }
-        | _create_force_keyframes_args()
+        | _create_force_keyframes_kwargs()
     )
 
 
@@ -448,7 +417,7 @@ def speedup(  # command
     input_file: Path | str,
     output_file: Optional[Path] = None,
     multiple: float | int = 2,
-    **othertags: T_Othertags,
+    **othertags: FF_Kwargs,
 ) -> int:
     """_summary_
 
@@ -477,11 +446,11 @@ def speedup(  # command
         logger.error("Speedup multiple 1, only replace target file")
         return 0
 
-    output_kwargs: T_FF_Render_Args = {
+    output_kwargs: FF_Render_In = {
         "input_file": input_file,
         "output_file": output_file,
         "task_name": task_descripton,
-        "othertags": _create_speedup_args(multiple) | othertags,
+        "othertags": _create_speedup_kwargs(multiple) | othertags,
     }
 
     try:
@@ -495,7 +464,7 @@ def speedup(  # command
 
 
 # ff_render: jumpcut
-def _create_jumpcut_args(
+def _create_jumpcut_kwargs(
     b1_duration: float,
     b2_duration: float,
     b1_multiple: float,  # 0 means unwanted cut out
@@ -523,7 +492,7 @@ def _create_jumpcut_args(
             "fps_mode": "vfr",
             "async": 1,
         }
-        | _create_force_keyframes_args()
+        | _create_force_keyframes_kwargs()
     )
 
     return args
@@ -536,7 +505,7 @@ def jumpcut(  # command
     b2_duration: float = 5,
     b1_multiple: float = 1,  # 0 means unwanted cut out
     b2_multiple: float = 0,  # 0 means unwanted cut out
-    **othertags: T_Othertags,
+    **othertags: FF_Kwargs,
 ) -> int:
     """_summary_
 
@@ -564,11 +533,11 @@ def jumpcut(  # command
     task_descripton = f"{_tasks.JUMPCUT}_b1({b1_duration}x{b1_multiple})_b2({b2_duration}x{b2_multiple})"
     input_file = Path(input_file)
 
-    output_kwargs: T_FF_Render_Args = {
+    output_kwargs: FF_Render_In = {
         "input_file": input_file,
         "output_file": output_file,
         "task_name": task_descripton,
-        "othertags": _create_jumpcut_args(
+        "othertags": _create_jumpcut_kwargs(
             b1_duration, b2_duration, b1_multiple, b2_multiple
         )
         | othertags,
@@ -628,11 +597,11 @@ def merge(
         input_dir_or_files = Path(input_dir_or_files)
     input_txt: Path = create_merge_txt(input_dir_or_files)
 
-    output_kwargs: T_FF_Render_Args = {
+    output_kwargs: FF_Render_In = {
         "input_file": input_txt,
         "output_file": output_file,
         "task_name": task_descripton,
-        "input_tags": {
+        "input_kwargs": {
             "f": "concat",
             "safe": 0,
         },
@@ -660,8 +629,8 @@ def advanced_keep_or_remove_by_cuts(
     input_file: Path,
     output_file: Path | None,
     video_segments: Sequence[str] | Sequence[float],
-    odd_args: None | dict[str, str | float],  # For segments, None means remove
-    even_args: None | dict[str, str | float] = None,  # For other segments
+    odd_kwargs: None | dict[str, str | float],  # For segments, None means remove
+    even_kwargs: None | dict[str, str | float] = None,  # For other segments
 ) -> int:
     task_descripton = _tasks.KEEP_OR_REMOVE
 
@@ -673,7 +642,7 @@ def advanced_keep_or_remove_by_cuts(
         output_file.stem + "_processing" + output_file.suffix
     )
     logger.info(
-        f"{task_descripton.capitalize()} {input_file.name} to {output_file.name} with {odd_args = } ,{even_args = }."
+        f"{task_descripton.capitalize()} {input_file.name} to {output_file.name} with {odd_kwargs = } ,{even_kwargs = }."
     )
 
     # Step 1:ff_render video segments if needed and double them
@@ -694,9 +663,9 @@ def advanced_keep_or_remove_by_cuts(
     with concurrent.futures.ThreadPoolExecutor(max_workers=num_cores) as executor:
         futures = []
         for i in range(0, len(video_segments), 2):
-            if even_args is None and i % 4 == 0:
+            if even_kwargs is None and i % 4 == 0:
                 continue
-            if odd_args is None and i % 4 == 2:
+            if odd_kwargs is None and i % 4 == 2:
                 continue
             start_time: str = video_segments[i]  # type:ignore
             end_time: str = video_segments[i + 1]  # type:ignore
@@ -712,15 +681,15 @@ def advanced_keep_or_remove_by_cuts(
             futures.append(future)  # Store the future for tracking
             future.result()  # Ensures `cut` completes before proceeding
 
-            further_args = even_args if i % 4 == 0 else odd_args
+            further_kwargs = even_kwargs if i % 4 == 0 else odd_kwargs
 
-            if not further_args:
+            if not further_kwargs:
                 continue
 
-            output_kwargs: T_FF_Render_Args = {
+            output_kwargs: FF_Render_In = {
                 "input_file": seg_output_file,
                 "output_file": seg_output_file,
-                "othertags": further_args,
+                "othertags": further_kwargs,
             }
 
             # Submit further render task to the executor
@@ -763,10 +732,10 @@ def get_non_silence_segs(  # command
         tuple[Sequence[float], float, float]: (non_silence_segs, total_duration, total_silence_duration)
     """
     # init task
-    task_descripton = f"{_tasks.GET_NON_SILENCE_SEGS}_by_{dB}"
+    task_descripton = f"{_tasks.GENON_SILENCE_SEGS}_by_{dB}"
     input_file = Path(input_file)
 
-    output_kwargs: T_FF_Render_Args = {
+    output_kwargs: FF_Render_In = {
         "input_file": input_file,
         "output_file": Path(""),
         "task_name": task_descripton,
@@ -802,7 +771,7 @@ def get_non_silence_segs(  # command
     #     f"Detecting silences of {input_file.name} by {dB = } and {output_kwargs = }"
     # )
 
-    # command = ["ffmpeg"] + _dic_to_ffmpeg_args(output_kwargs)
+    # command = ["ffmpeg"] + _dic_to_ffmpeg_kwargs(output_kwargs)
     # result = subprocess.run(
     #     command, capture_output=True, text=True, check=True, encoding="utf-8"
     # )
@@ -979,8 +948,8 @@ def cut_silence(
     dB: int = -21,
     sl_duration: float = 0.2,
     seg_min_duration: float = 0,
-    odd_args: dict[str, str | float] = {},
-    even_args: dict[str, str | float] | None = None,
+    odd_kwargs: dict[str, str | float] = {},
+    even_kwargs: dict[str, str | float] | None = None,
 ) -> int | Enum:
     class error_code(Enum):
         DURATION_LESS_THAN_ZERO = auto()
@@ -992,7 +961,7 @@ def cut_silence(
         return error_code.DURATION_LESS_THAN_ZERO
 
     # init task
-    task_descripton = f"{_tasks.CUT_SILENCE}_by_{dB}"
+    task_descripton = f"{_tasks.CUSILENCE}_by_{dB}"
     input_file = Path(input_file)
 
     if output_file is None:
@@ -1031,8 +1000,8 @@ def cut_silence(
             input_file=input_file,
             output_file=temp_output_file,
             video_segments=merged_overlapping_segments,
-            odd_args=odd_args,
-            even_args=even_args,
+            odd_kwargs=odd_kwargs,
+            even_kwargs=even_kwargs,
         )
         temp_output_file.replace(output_file)
 
@@ -1185,7 +1154,7 @@ def _create_cut_sl_filter_tempfile(
     return path
 
 
-def _create_cut_sl_args(input_file: Path, dB: int, sl_duration: float) -> dict:
+def _create_cut_sl_kwargs(input_file: Path, dB: int, sl_duration: float) -> dict:
     non_silence_segments: Sequence[float] = get_non_silence_segs(
         input_file, dB, sl_duration
     )[0]
@@ -1228,11 +1197,11 @@ def cut_silence_rerender(  # command
         return 1
 
     # init task
-    task_descripton = f"{_tasks.CUT_SILENCE_RERENDER}_by_{dB}"
+    task_descripton = f"{_tasks.CUSILENCE_RERENDER}_by_{dB}"
     input_file = Path(input_file)
 
-    othertags = _create_cut_sl_args(input_file, dB, sl_duration) | othertags
-    output_kwargs: T_FF_Render_Args = {
+    othertags = _create_cut_sl_kwargs(input_file, dB, sl_duration) | othertags
+    output_kwargs: FF_Render_In = {
         "input_file": input_file,
         "output_file": output_file,
         "task_name": task_descripton,
