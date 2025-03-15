@@ -16,6 +16,7 @@ from ffmpeg_types import EncodeKwargs, VideoSuffix
 import functools
 from pydantic import BaseModel, Field
 import shutil
+from itertools import batched
 
 
 class FrozenBaseModel(BaseModel):
@@ -67,9 +68,9 @@ class _tasks(StrEnum):
     PROBE_ENCODING = auto()
     PROBE_DURATION = auto()
     PROBE_IS_VALID_VIDEO = auto()
-    GENON_SILENCE_SEGS = auto()
-    CUSILENCE = auto()
-    CUSILENCE_RERENDER = auto()
+    GET_NON_SILENCE_SEGS = auto()
+    CUT_SILENCE = auto()
+    CUT_SILENCE_RERENDER = auto()
 
 
 # basic
@@ -93,7 +94,7 @@ def _create_ff_kwargs(
 
     input_file_kwargs: Mapping[Literal["i"], Path] = {"i": input_file}
     # Handle file path
-    if output_file == Path:
+    if output_file == Path():
         output_file_kwargs: Mapping[Literal["y"], Path] = {}
     else:
         output_file_kwargs = {"y": output_file}
@@ -280,25 +281,26 @@ class FF_Render_Exception(TypedDict):
     meaasge: str
 
 
-class FF_Kwargs_In(BaseModel):
+class FF_Create_Command(BaseModel):
     input_file: Path | str = Path()
     output_file: Optional[Path | str] = None
     input_kwargs: FF_Kwargs = Field(default_factory=dict)
     output_kwargs: FF_Kwargs = Field(default_factory=dict)
 
 
-class FF_Render_In(FF_Kwargs_In):
+class FF_Create_Render(FF_Create_Command):
     task_descripton: Optional[str] = "render"
     exception: Optional[FF_Render_Exception] = None
+    post_task: Optional[Callable[[], None]] = None
 
 
-class FF_Render_Tasks(FF_Render_In):
+class FF_Create_Render_Task(FF_Create_Render):
     def custom(
         self,
         input_file: Path | str,
         output_file: Optional[Path | str] = None,
         **othertags,
-    ) -> FF_Render_In:
+    ) -> FF_Create_Render:
         self.input_file = input_file
         self.output_file = output_file
         self.output_kwargs = othertags
@@ -312,7 +314,7 @@ class FF_Render_Tasks(FF_Render_In):
         to: str = "00:00:01",
         rerender: bool = False,
         **othertags,
-    ) -> FF_Render_In:
+    ) -> FF_Create_Render:
         self.task_descripton = f"{_tasks.CUT}_{_convert_timestamp_to_seconds(ss)}-{_convert_timestamp_to_seconds(to)}"
         self.input_file = input_file
         self.output_file = output_file
@@ -321,7 +323,7 @@ class FF_Render_Tasks(FF_Render_In):
                 "ss": ss,
                 "to": to,
             }
-            | ({} if rerender else {"cv": "copy", "ca": "copy"})
+            | ({} if rerender else {"c:v": "copy", "c:a": "copy"})
             | othertags
         )
         return self
@@ -332,7 +334,7 @@ class FF_Render_Tasks(FF_Render_In):
         output_file: Optional[Path | str] = None,
         multiple: float | int = 2,
         **othertags,
-    ) -> FF_Render_In:
+    ) -> FF_Create_Render:
         self.task_descripton = f"{_tasks.SPEEDUP}_by_{multiple}"
         self.input_file = input_file
         self.output_file = output_file
@@ -363,7 +365,7 @@ class FF_Render_Tasks(FF_Render_In):
         b1_multiple: float = 1,  # 0 means remove this part
         b2_multiple: float = 0,  # 0 means remove this part
         **othertags,
-    ) -> FF_Render_In:
+    ) -> FF_Create_Render:
         self.task_descripton = f"{_tasks.JUMPCUT}_b1({b1_duration}x{b1_multiple})_b2({b2_duration}x{b2_multiple})"
         self.input_file = input_file
         self.output_file = output_file
@@ -386,6 +388,86 @@ class FF_Render_Tasks(FF_Render_In):
 
         return self
 
+    def merge(
+        self,
+        input_dir_or_files: Path | str | list[Path] | list[str],
+        output_file: Path | None = None,
+        **othertags,
+    ) -> FF_Create_Render:
+        # Create input.txt
+        if isinstance(input_dir_or_files, Iterable):
+            input_dir_or_files = [Path(video) for video in input_dir_or_files]
+        else:
+            input_dir_or_files = Path(input_dir_or_files)
+        input_txt: Path = create_merge_txt(input_dir_or_files)
+
+        self.task_descripton = _tasks.MERGE
+        self.input_file = input_txt
+        self.output_file = output_file
+        self.input_kwargs = {
+            "f": "concat",
+            "safe": 0,
+        }
+        self.output_kwargs = {
+            "c:a": "copy",
+            "c:v": "copy",
+        } | othertags
+
+        def post_task():
+            os.remove(input_txt)
+            if not any(input_txt.parent.iterdir()):
+                os.rmdir(input_txt.parent)
+                logger.info(f"{input_txt.parent} removed")
+
+        self.post_task = post_task
+
+        return self
+
+    def get_silence_segs(
+        self,
+        input_file: Path | str,
+        dB: int = -21,
+        sl_duration: float = 0.2,
+        **othertags,
+    ) -> FF_Create_Render:
+        self.task_descripton = f"{_tasks.GET_NON_SILENCE_SEGS}_by_{dB}"
+        self.input_file = input_file
+        self.output_file = Path()
+        self.output_kwargs = (
+            {
+                "af": f"silencedetect=n={dB}dB:d={sl_duration}",
+                "c:v": "copy",
+                "f": "null",
+                "loglevel": "info",
+            }
+            | othertags
+            | {"": ""}
+        )
+        return self
+
+    def cut_silence_rerender(
+        self,
+        input_file: Path | str,
+        output_file: Path | str | None = None,
+        dB: int = -21,
+        sl_duration: float = 0.2,
+        **othertags,
+    ) -> FF_Create_Render:
+        self.task_descripton = f"{_tasks.CUT_SILENCE_RERENDER}_by_{dB}"
+        self.input_file = input_file
+        self.output_file = output_file
+        self.output_kwargs = othertags = (
+            _create_cut_sl_kwargs(input_file, dB, sl_duration) | othertags
+        )
+
+        def post_task():
+            os.remove(othertags["filter_script:v"])
+            os.remove(othertags["filter_script:a"])
+
+        self.post_task = post_task
+
+        return self
+
 
 def ff_render(
     input_file: Path | str,
@@ -394,6 +476,7 @@ def ff_render(
     input_kwargs: FF_Kwargs,
     output_kwargs: FF_Kwargs,
     exception: Optional[FF_Render_Exception],
+    post_task: Optional[Callable[[], None]],
 ) -> str | int:  # command
     """Executeing ffmpeg with given args for different tasks
 
@@ -444,7 +527,7 @@ def ff_render(
         return exception["code"]
 
     # Generate ff kwargs in
-    ff_kwargs_in: FF_Kwargs_In = FF_Kwargs_In(
+    ff_kwargs_in: FF_Create_Command = FF_Create_Command(
         input_file=input_file,
         output_file=temp_output_file,
         input_kwargs=input_kwargs,
@@ -461,6 +544,11 @@ def ff_render(
         result: str = _ffmpeg(**ff_kwargs_out)
         if temp_output_file != output_file:
             temp_output_file.replace(output_file)
+
+        # Handle post task
+        if post_task is not None:
+            post_task()
+
         return result
     except Exception as e:
         logger.error(
@@ -470,15 +558,15 @@ def ff_render(
 
 
 # ff_render
-def render(  # command
-    Render_Tasks: FF_Render_In,
-) -> int:
+def render_task(  # command
+    Render_Tasks: FF_Create_Render,
+) -> str | int:
     try:
-        ff_render(**Render_Tasks.model_dump())
+        result = ff_render(**Render_Tasks.model_dump())
+        return result
     except Exception as e:
         logger.error(f"Error: {e}")
         raise e
-    return 0
 
 
 # ff_render: sppedup
@@ -551,61 +639,6 @@ def _create_jumpcut_kwargs(
     return args
 
 
-def jumpcut(  # command
-    input_file: Path | str,
-    output_file: Path | None = None,
-    b1_duration: float = 5,
-    b2_duration: float = 5,
-    b1_multiple: float = 1,  # 0 means unwanted cut out
-    b2_multiple: float = 0,  # 0 means unwanted cut out
-    **othertags: FF_Kwargs,
-) -> int:
-    """_summary_
-
-    Args:
-        output_file (Path | None): _description_
-        b1_duration (float): _description_
-        b2_duration (float): _description_
-        b1_multiple (float, optional): _description_. Defaults to 0.
-
-    Returns:
-        int: _description_
-    """
-    # error handling
-    if any((b1_duration <= 0, b2_duration <= 0)):
-        logger.error("Both 'interval' and 'lasting' must be greater than 0.")
-        return 1
-
-    if any((b1_multiple < 0, b2_multiple < 0)):
-        logger.error(
-            "Both 'interval_multiple' and 'lasting_multiple' must be greater or equal to 0."
-        )
-        return 2
-
-    # init task
-    task_descripton = f"{_tasks.JUMPCUT}_b1({b1_duration}x{b1_multiple})_b2({b2_duration}x{b2_multiple})"
-    input_file = Path(input_file)
-
-    output_kwargs: FF_Render_In = {
-        "input_file": input_file,
-        "output_file": output_file,
-        "task_name": task_descripton,
-        "othertags": _create_jumpcut_kwargs(
-            b1_duration, b2_duration, b1_multiple, b2_multiple
-        )
-        | othertags,
-    }
-
-    try:
-        ff_render(**output_kwargs)
-    except Exception as e:
-        logger.error(
-            f"Failed to {task_descripton} videos for {input_file}. Error: {str(e)}"
-        )
-        return 2
-    return 0
-
-
 # merge
 def create_merge_txt(
     video_files_source: Path | list[Path], output_txt: Path | None = None
@@ -637,91 +670,69 @@ def create_merge_txt(
     return output_txt
 
 
-def merge(
-    input_dir_or_files: Path | str | list[Path] | list[str],
-    output_file: Path | None = None,
-    **othertags,
-) -> int:  # command
-    # init task
-    task_descripton = f"{_tasks.MERGE}"
-    if isinstance(input_dir_or_files, Iterable):
-        input_dir_or_files = [Path(video) for video in input_dir_or_files]
-    else:
-        input_dir_or_files = Path(input_dir_or_files)
-    input_txt: Path = create_merge_txt(input_dir_or_files)
-
-    output_kwargs: FF_Render_In = {
-        "input_file": input_txt,
-        "output_file": output_file,
-        "task_name": task_descripton,
-        "input_kwargs": {
-            "f": "concat",
-            "safe": 0,
-        },
-        "othertags": {
-            "c:a": "copy",
-            "c:v": "copy",
-        }
-        | othertags,
-    }
-
-    try:
-        ff_render(**output_kwargs)
-        os.remove(input_txt)
-        if not any(input_txt.parent.iterdir()):
-            os.rmdir(input_txt.parent)
-            print(f"{input_txt.parent} removed")
-        return 0
-    except Exception as e:
-        logger.error(f"Failed merging {input_txt}. Error: {str(e)}")
-        raise e
+type FURTHER_KWARGS = None | FF_Kwargs
 
 
 # keep or remove copy/rendering
 def advanced_keep_or_remove_by_cuts(
-    input_file: Path,
-    output_file: Path | None,
+    input_file: Path | str,
+    output_file: Path | str | None,
     video_segments: Sequence[str] | Sequence[float],
-    odd_kwargs: None | dict[str, str | float],  # For segments, None means remove
-    even_kwargs: None | dict[str, str | float] = None,  # For other segments
+    even_kwargs: Optional[
+        FURTHER_KWARGS | Literal["copy"]
+    ] = None,  # For other segments, None means remove, copy means copy
+    odd_kwargs: Optional[
+        FURTHER_KWARGS | Literal["copy"]
+    ] = "copy",  # For segments, None means remove, copy means copy
 ) -> int:
     task_descripton = _tasks.KEEP_OR_REMOVE
+    input_file = Path(input_file)
 
+    # Set the output file path
     if output_file is None:
         output_file = input_file.parent / (
             input_file.stem + "_" + task_descripton + input_file.suffix
         )
-    temp_output_file: Path = output_file.parent / (
-        output_file.stem + "_processing" + output_file.suffix
-    )
+    else:
+        output_file = Path(output_file)
+
     logger.info(
         f"{task_descripton.capitalize()} {input_file.name} to {output_file.name} with {odd_kwargs = } ,{even_kwargs = }."
     )
 
-    # Step 1:ff_render video segments if needed and double them
+    # Double every time point and convert to timestamp if needed
     video_segments = deque(
         _convert_seconds_to_timestamp(s) if isinstance(s, (float, int)) else s
         for o in video_segments
-        for s in (o, o)
-    )  # type: ignore
+        for s in (o, o)  # double every time point
+    )
 
-    # Step 2: create a full segment list
-    video_segments.appendleft("00:00:00.000")  # type: ignore
-    video_segments.append(_convert_seconds_to_timestamp(probe_duration(input_file)))  # type: ignore
-
-    # Use ThreadPoolExecutor to manage the threads
+    # Create a full segment list
+    video_segments.appendleft("00:00:00.000")
+    video_segments.append(_convert_seconds_to_timestamp(probe_duration(input_file)))
+    batched_segments = batched(video_segments, 2)
+    # Use ThreadPoolExecutor to manage rendreing tasks
     temp_dir: Path = Path(tempfile.mkdtemp())
     num_cores = os.cpu_count()
     cut_videos = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=num_cores) as executor:
         futures = []
-        for i in range(0, len(video_segments), 2):
-            if even_kwargs is None and i % 4 == 0:
+        further_kwargs: dict[int, FURTHER_KWARGS] = {
+            0: {"c": "copy"} if even_kwargs == "copy" else even_kwargs,
+            1: {"c": "copy"} if odd_kwargs == "copy" else odd_kwargs,
+        }
+        for i, segment in enumerate(batched_segments):
+            i_remainder = i % 2
+
+            # remove unwanted segments
+            if i_remainder == 0 and even_kwargs is None:
                 continue
-            if odd_kwargs is None and i % 4 == 2:
+            if i_remainder == 1 and odd_kwargs is None:
                 continue
-            start_time: str = video_segments[i]  # type:ignore
-            end_time: str = video_segments[i + 1]  # type:ignore
+
+            # cut segments by submitting cut task to the executor
+            start_time: str = segment[0]
+            end_time: str = segment[1]
             if start_time[:8] == end_time[:8]:
                 logger.info(
                     f"Sagment is too short to cut, skipping {start_time} ot {end_time}"
@@ -729,114 +740,59 @@ def advanced_keep_or_remove_by_cuts(
                 continue
             seg_output_file = temp_dir / f"{i}{input_file.suffix}"
             cut_videos.append(seg_output_file)
-            ff_cut_kwargs: FF_Render_In = FF_Render_Tasks().cut(
+            ff_cut_kwargs: FF_Create_Render = FF_Create_Render_Task().cut(
                 input_file=input_file,
                 output_file=seg_output_file,
                 ss=start_time,
                 to=end_time,
             )
-
-            # Submit the cut task to the executor
-            future = executor.submit(render, ff_cut_kwargs)
+            future = executor.submit(render_task, ff_cut_kwargs)
             futures.append(future)  # Store the future for tracking
             future.result()  # Ensures `cut` completes before proceeding
 
-            further_kwargs = even_kwargs if i % 4 == 0 else odd_kwargs
-
-            if not further_kwargs:
+            # Skip further rendering if the segment is to be copied
+            if further_kwargs[i_remainder] == "copy":
                 continue
 
-            ff_custom_kwargs: FF_Render_In = FF_Render_Tasks().custom(
+            # Further render the segment with giver kwargs
+            ff_custom_kwargs: FF_Create_Render = FF_Create_Render_Task().custom(
                 input_file=seg_output_file,
                 output_file=seg_output_file,
-                **further_kwargs,
+                **(further_kwargs[i_remainder]),  # type: ignore
             )
 
             # Submit further render task to the executor
-            future = executor.submit(ff_render, ff_custom_kwargs)
+            future = executor.submit(render_task, ff_custom_kwargs)
             futures.append(future)  # Store the future for tracking
             future.result()
-
         # Optionally, wait for all futures to complete
         # concurrent.futures.wait(futures)
 
-    # Step 4: Sort the cut video paths by filename (index order)
+    # Sort the cut video paths by filename by index order
     cut_videos.sort(key=lambda video_file: int(video_file.stem))
 
-    # Step 4: Merge the kept segments
     try:
-        merge(cut_videos, temp_output_file)
-        temp_output_file.replace(output_file)
-        # Step 5: Clean up temporary files
+        # Merge the kept segments
+        merge_task: FF_Create_Render = FF_Create_Render_Task().merge(
+            cut_videos, output_file
+        )
+        render_task(merge_task)
+
+        # Clean up temporary files and dir
         for video_path in cut_videos:
             os.remove(video_path)
         os.rmdir(temp_dir)
+
     except Exception as e:
         logger.error(f"Failed to {task_descripton} for {input_file}. Error: {e}")
         return 1
     return 0
 
 
-#  Get non silence segments
-def get_non_silence_segs(  # command
-    input_file: Path, dB: int = -21, sl_duration: float = 0.2, **othertags
+#  Extract non silence segments info
+def extract_non_silence_segs_info(
+    non_silence_segs_str: str,
 ) -> tuple[Sequence[float], float, float]:
-    """_summary_
-
-    Args:
-        input_file (Path): _description_
-        dB (int, optional): _description_. Defaults to -35.
-        sl_duration (float, optional): _description_. Defaults to 1.
-
-    Returns:
-        tuple[Sequence[float], float, float]: (non_silence_segs, total_duration, total_silence_duration)
-    """
-    # init task
-    task_descripton = f"{_tasks.GENON_SILENCE_SEGS}_by_{dB}"
-    input_file = Path(input_file)
-
-    output_kwargs: FF_Render_In = {
-        "input_file": input_file,
-        "output_file": Path(""),
-        "task_name": task_descripton,
-        "othertags": {
-            "af": f"silencedetect=n={dB}dB:d={sl_duration}",
-            "c:v": "copy",
-            "f": "null",
-        }
-        | othertags
-        | {"": ""},
-    }
-
-    try:
-        non_silence_segs_str: str = ff_render(**output_kwargs)
-    except Exception as e:
-        raise Exception(
-            f"Failed to {task_descripton} videos for {input_file}. Error: {str(e)}"
-        )
-
-    # output_kwargs1: dict = (
-    #     {
-    #         "hwaccel": "auto",
-    #         "i": input_file,
-    #         "af": f"silencedetect=n={dB}dB:d={sl_duration}",
-    #         "c:v": "copy",
-    #         "f": "null",
-    #     }
-    #     | othertags
-    #     | {"": ""}
-    # )
-
-    # logger.info(
-    #     f"Detecting silences of {input_file.name} by {dB = } and {output_kwargs = }"
-    # )
-
-    # command = ["ffmpeg"] + _dic_to_ffmpeg_kwargs(output_kwargs)
-    # result = subprocess.run(
-    #     command, capture_output=True, text=True, check=True, encoding="utf-8"
-    # )
-    # output = result.stdout + result.stderr
-
     # Total duration
     total_duration_pattern = r"Duration: (.+?),"
     total_duration_match: str | None = re.findall(
@@ -871,7 +827,7 @@ def get_non_silence_segs(  # command
     return (non_silence_segs, total_duration, total_silence_duration)
 
 
-# ff_render: cut silenct copy
+# ff_render: cut silence copy
 def _adjust_segments_to_keyframes(
     video_segments: Sequence[float], keyframe_times: Sequence[float]
 ) -> Sequence[float]:
@@ -900,7 +856,7 @@ def _adjust_segments_to_keyframes(
             adjusted_time = (
                 keyframe_times[keyframe_index]
                 if keyframe_index < len(keyframe_times)
-                else time
+                else _time
             )
             adjusted_segments.append(adjusted_time)
 
@@ -1004,12 +960,16 @@ def _merge_overlapping_segments(segments: Sequence[float]) -> Sequence[float]:
 
 def cut_silence(
     input_file: Path | str,
-    output_file: Path | None = None,
+    output_file: Path | str | None = None,
     dB: int = -21,
     sl_duration: float = 0.2,
     seg_min_duration: float = 0,
-    odd_kwargs: dict[str, str | float] = {},
-    even_kwargs: dict[str, str | float] | None = None,
+    even_kwargs: Optional[
+        FURTHER_KWARGS | Literal["copy"]
+    ] = None,  # For other segments, None means remove, copy means copy
+    odd_kwargs: Optional[
+        FURTHER_KWARGS | Literal["copy"]
+    ] = "copy",  # For segments, None means remove, copy means copy
 ) -> int | Enum:
     class error_code(Enum):
         DURATION_LESS_THAN_ZERO = auto()
@@ -1021,13 +981,15 @@ def cut_silence(
         return error_code.DURATION_LESS_THAN_ZERO
 
     # init task
-    task_descripton = f"{_tasks.CUSILENCE}_by_{dB}"
+    task_descripton = f"{_tasks.CUT_SILENCE}_by_{dB}"
     input_file = Path(input_file)
 
     if output_file is None:
         output_file = input_file.parent / (
             input_file.stem + "_" + task_descripton + input_file.suffix
         )
+    else:
+        output_file = Path(output_file)
     temp_output_file: Path = output_file.parent / (
         output_file.stem + "_processing" + output_file.suffix
     )
@@ -1035,10 +997,12 @@ def cut_silence(
         f"{task_descripton.capitalize()} {input_file} to {output_file} with {dB = } ,{sl_duration = }, {seg_min_duration = }."
     )
 
-    non_silence_segments: Sequence[float]
-    total_duration: float
-    non_silence_segments, total_duration, _ = get_non_silence_segs(
-        input_file, dB, sl_duration
+    get_silence_segs_task: FF_Create_Render = FF_Create_Render_Task().get_silence_segs(
+        input_file=input_file, dB=dB, sl_duration=sl_duration
+    )
+    non_silence_str: str = str(render_task(get_silence_segs_task))
+    non_silence_segments, total_duration, _ = extract_non_silence_segs_info(
+        non_silence_str
     )
 
     adjusted_segments: Sequence[float] = _adjust_segments_to_keyframes(
@@ -1067,123 +1031,8 @@ def cut_silence(
 
     except Exception as e:
         logger.error(f"Failed to {task_descripton} for {input_file}. Error: {e}")
-        return error_code.FAILED_TO_CUT
-    return 0
-
-
-# keep or remove copy
-def _split_segments_cut(
-    input_file: Path,
-    video_segments: Sequence[float] | Sequence[str],
-    output_dir: Path | None = None,
-    **othertags,
-) -> int:
-    """_summary_
-
-    Args:
-        input_file (Path): _description_
-        video_segments (Sequence[float] | Sequence[str]): _description_
-        output_dir (Path | None, optional): _description_. Defaults to None.
-
-    Raises:
-        ValueError: _description_
-
-    Returns:
-        tuple[Sequence[Path], Path]: (cut_videos, input_txt_path)
-    """
-
-    # Step 1: Validate input
-    if len(video_segments) % 2 != 0:
-        raise ValueError(
-            "video_segments must contain an even number of elements (start and end times)."
-        )
-
-    # Step 2: Create a temporary folder for storing cut videos
-    if output_dir is None:
-        output_dir = input_file.parent / f"{input_file.stem}_segments"
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Step 3: Use threading to process video segments
-    # Get the number of CPU cores
-    num_cores = os.cpu_count()
-
-    # Use ThreadPoolExecutor to manage the threads
-    with concurrent.futures.ThreadPoolExecutor(max_workers=num_cores) as executor:
-        futures = []
-        for i in range(0, len(video_segments), 2):
-            if isinstance(video_segments[i], float):
-                start_time = _convert_seconds_to_timestamp(
-                    video_segments[i]  # type:ignore
-                )
-                end_time = _convert_seconds_to_timestamp(
-                    video_segments[i + 1]  # type:ignore
-                )
-            else:
-                start_time: str = video_segments[i]  # type:ignore
-                end_time: str = video_segments[i + 1]  # type:ignore
-            if start_time == end_time:
-                continue
-            output_file: Path = output_dir / f"{i // 2}{input_file.suffix}"
-
-            # Submit the cut task to the executor
-            future = executor.submit(
-                cut, input_file, output_file, start_time, end_time, **othertags
-            )
-            futures.append(future)
-
-        # Optionally, wait for all futures to complete
-        concurrent.futures.wait(futures)
-
-    return 0
-
-
-def keep_or_remove_by_cuts(
-    input_file: Path,
-    output_file: Path | None,
-    video_segments: Sequence[str] | Sequence[float],
-    keep_handle: bool = True,  # True means keep, False means remove
-):
-    if output_file is None:
-        output_file = input_file.parent / (
-            input_file.stem + "_" + _tasks.KEEP_OR_REMOVE + input_file.suffix
-        )
-    temp_output_file: Path = output_file.parent / (
-        output_file.stem + "_processing" + output_file.suffix
-    )
-    logger.info(f"{_tasks.KEEP_OR_REMOVE} {input_file.name} to {output_file.name}")
-
-    # Step 0: Create a temporary folder for storing cut videos
-    temp_dir: Path = Path(tempfile.mkdtemp())
-
-    # Step 1:ff_render video segments if needed
-    video_segments = deque(
-        _convert_timestamp_to_seconds(s) if isinstance(s, str) else s
-        for s in video_segments
-    )
-
-    # Step 2: rearrange video_segments if keep_handle == False
-    if not keep_handle:
-        video_segments.appendleft(0.0)
-        video_segments.append(probe_duration(input_file))
-
-    # Step 3: Cut the video into segments based on the provided start and end times
-    _do: int = _split_segments_cut(
-        input_file,
-        video_segments,
-        temp_dir,
-    )
-
-    # Step 4: Merge the kept segments
-    try:
-        merge(temp_dir, temp_output_file)
-        temp_output_file.replace(output_file)
-        # Step 5: Clean up temporary files
-        for video in temp_dir.iterdir():
-            os.remove(video)
-        os.rmdir(temp_dir)
-    except Exception as e:
-        logger.error(f"Failed to {_tasks.KEEP_OR_REMOVE} for {input_file}. Error: {e}")
-        return 1
+        raise e
+        # return error_code.FAILED_TO_CUT
     return 0
 
 
@@ -1214,9 +1063,13 @@ def _create_cut_sl_filter_tempfile(
     return path
 
 
-def _create_cut_sl_kwargs(input_file: Path, dB: int, sl_duration: float) -> dict:
-    non_silence_segments: Sequence[float] = get_non_silence_segs(
-        input_file, dB, sl_duration
+def _create_cut_sl_kwargs(input_file: Path | str, dB: int, sl_duration: float) -> dict:
+    get_silence_segs_task: FF_Create_Render = FF_Create_Render_Task().get_silence_segs(
+        input_file=input_file, dB=dB, sl_duration=sl_duration
+    )
+    non_silence_str: str = str(render_task(get_silence_segs_task))
+    non_silence_segments: Sequence[float] = extract_non_silence_segs_info(
+        non_silence_str
     )[0]
 
     class CSFiltersInfo(Enum):
@@ -1242,40 +1095,6 @@ def _create_cut_sl_kwargs(input_file: Path, dB: int, sl_duration: float) -> dict
         "filter_script:v": video_filter_script,
         "filter_script:a": audio_filter_script,
     }
-
-
-def cut_silence_rerender(  # command
-    input_file: Path | str,
-    output_file: Path | None = None,
-    dB: int = -21,
-    sl_duration: float = 0.2,
-    **othertags,
-) -> int:
-    # error handling
-    if sl_duration <= 0:
-        logger.error("Duration must be greater than 0.")
-        return 1
-
-    # init task
-    task_descripton = f"{_tasks.CUSILENCE_RERENDER}_by_{dB}"
-    input_file = Path(input_file)
-
-    othertags = _create_cut_sl_kwargs(input_file, dB, sl_duration) | othertags
-    output_kwargs: FF_Render_In = {
-        "input_file": input_file,
-        "output_file": output_file,
-        "task_name": task_descripton,
-        "othertags": othertags,
-    }
-
-    try:
-        ff_render(**output_kwargs)
-        os.remove(othertags["filter_script:v"])
-        os.remove(othertags["filter_script:a"])
-    except Exception as e:
-        logger.error(f"Failed to cut silence for {input_file}. Error: {e}")
-        return 2
-    return 0
 
 
 # not useful

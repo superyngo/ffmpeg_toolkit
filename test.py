@@ -12,7 +12,7 @@ os.environ["PATH"] = a = str(bin_path) + os.pathsep + os.environ["PATH"]
 
 # import code
 
-file = r"C:\Users\user\Downloads\IMG_2078.mp4"
+input_file = Path(r"F:\Users\user\Downloads\IMG_2078.mp4")
 dir = Path(r"F:\Users\user\Downloads\新增資料夾")
 # multiple = 4.1
 # ffmpeg_converter.speedup(file, multiple=multiple)
@@ -30,10 +30,14 @@ dir = Path(r"F:\Users\user\Downloads\新增資料夾")
 # )
 # ffmpeg_converter.cut(ff_cut_kwargs_In)
 
-ff_kwargs: ffmpeg_converter.FF_Render_In = ffmpeg_converter.FF_Render_Tasks().jumpcut(
-    input_file=file, b1_duration=0.5
-)
-ffmpeg_converter.render(ff_kwargs)
+# ff_render_task: ffmpeg_converter.FF_Create_Render = (
+#     ffmpeg_converter.FF_Create_Render_Task().get_silence_segs(input_file=file)
+# )
+# non_silence: str = str(ffmpeg_converter.render_task(ff_render_task))
+# silence_info = ffmpeg_converter.extract_non_silence_segs_info(non_silence)
+
+
+# ffmpeg_converter.advanced_keep_or_remove_by_cuts(file, None, silence_info[0])
 
 # ffmpeg_converter.cut_silence_rerender(file)
 
@@ -46,3 +50,18 @@ ffmpeg_converter.render(ff_kwargs)
 # }
 
 # ffmpeg_converter.cut_silence(**cut_silence_args)
+# ff_render_task: ffmpeg_converter.FF_Create_Render = (
+#     ffmpeg_converter.FF_Create_Render_Task().merge(dir, dir / "output.mp4")
+# )
+# ffmpeg_converter.render_task(ff_render_task)
+
+# ff_render_task: FF_Create_Render = FF_Create_Render_Task().cut_silence_rerender(
+#     input_file
+# )
+# render_task(ff_render_task)
+
+ffmpeg_converter.cut_silence(
+    input_file,
+    even_kwargs=ffmpeg_converter._create_speedup_kwargs(60),
+    odd_kwargs=ffmpeg_converter._create_jumpcut_kwargs(1.5, 3, 2, 1),
+)
