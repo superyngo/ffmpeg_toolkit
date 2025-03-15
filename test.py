@@ -1,5 +1,5 @@
 import os
-import ffmpeg_converter
+import ffmpeg_toolkit
 from pathlib import Path
 
 os.environ["PYTHONUTF8"] = "1"
@@ -60,8 +60,8 @@ dir = Path(r"F:\Users\user\Downloads\新增資料夾")
 # )
 # render_task(ff_render_task)
 
-ffmpeg_converter.cut_silence(
+ffmpeg_toolkit.cut_silence(
     input_file,
-    even_kwargs=ffmpeg_converter._create_speedup_kwargs(60),
-    odd_kwargs=ffmpeg_converter._create_jumpcut_kwargs(1.5, 3, 2, 1),
+    even_kwargs=ffmpeg_toolkit._create_speedup_kwargs(60),
+    odd_kwargs=ffmpeg_toolkit._create_jumpcut_kwargs(1.5, 3, 2, 1),
 )
