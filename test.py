@@ -12,7 +12,7 @@ os.environ["PATH"] = a = str(bin_path) + os.pathsep + os.environ["PATH"]
 
 # import code
 
-input_file = Path(r"F:\Users\user\Downloads\IMG_2078.mp4")
+input_file = Path(r"F:\Users\user\Downloads\2025-03-15_1741989953_merged.mp4")
 dir = Path(r"F:\Users\user\Downloads\新增資料夾")
 # multiple = 4.1
 # ffmpeg_converter.speedup(file, multiple=multiple)
@@ -62,6 +62,18 @@ dir = Path(r"F:\Users\user\Downloads\新增資料夾")
 
 ffmpeg_toolkit.cut_silence(
     input_file,
-    even_kwargs=ffmpeg_toolkit._create_speedup_kwargs(60),
-    odd_kwargs=ffmpeg_toolkit._create_jumpcut_kwargs(1.5, 3, 2, 1),
 )
+# (input_file.parent / "segs").mkdir(exist_ok=True)
+# ff_split_task: ffmpeg_toolkit.FF_Create_Render = (
+#     ffmpeg_toolkit.FF_Create_Render_Task().split_segments(
+#         input_file=input_file,
+#         video_segments=[2, 4, 10],  # type: ignore
+#         output_dir=input_file.parent / "segs",
+#     )
+# )
+# ffmpeg_toolkit.render_task(ff_split_task)
+# ffmpeg_toolkit.cut_silence(
+#     input_file,
+#     even_kwargs="copy",
+#     odd_kwargs="copy",
+# )
