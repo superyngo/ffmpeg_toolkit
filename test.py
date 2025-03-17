@@ -12,18 +12,24 @@ os.environ["PATH"] = a = str(bin_path) + os.pathsep + os.environ["PATH"]
 
 # import code
 
-input_file = Path(r"F:\Users\user\Downloads\2025-03-15_1741989953_merged.mp4")
+
+input_file = Path(r"C:\Users\user\Downloads\2025-02-17_1739743880_merged.mp4")
+# input_file = Path(r"C:\Users\user\Downloads\IMG_2078.mp4")
 dir = Path(r"F:\Users\user\Downloads\新增資料夾")
-# multiple = 4.1
-# ffmpeg_converter.speedup(file, multiple=multiple)
+
 # jumpcut_args = {
-#     # "input_file": file,
+#     "input_file": input_file,
 #     "b1_duration": 0.5,
 #     "b2_duration": 1.5,
 #     "b1_multiple": 3,
 #     "b2_multiple": 10.5,
 # }
-# ffmpeg_converter.jumpcut(**jumpcut_args)
+# ff_render_task = ffmpeg_toolkit.FF_Create_Render_Task().jumpcut(**jumpcut_args)
+# ffmpeg_toolkit.render_task(ff_render_task)
+
+
+# ff_render_task = ffmpeg_toolkit.FF_Create_Render_Task().speedup(input_file, multiple=4)
+# ffmpeg_toolkit.render_task(ff_render_task)
 
 # ff_cut_kwargs_In: ffmpeg_converter.FF_Render_In = (
 #     ffmpeg_converter.FF_Render_Tasks().cut(input_file=file, to="00:00:10")
@@ -39,30 +45,29 @@ dir = Path(r"F:\Users\user\Downloads\新增資料夾")
 
 # ffmpeg_converter.advanced_keep_or_remove_by_cuts(file, None, silence_info[0])
 
-# ffmpeg_converter.cut_silence_rerender(file)
 
 # code.interact(local=globals())
 # ffmpeg_converter.merge(dir)
-# cut_silence_args = {
-#     "input_file": file,
-#     "odd_args": ffmpeg_converter._create_speedup_args(1),
-#     "even_args": ffmpeg_converter._create_speedup_args(60),
-# }
+cut_silence_args = {
+    "input_file": input_file,
+    "odd_kwargs": ffmpeg_toolkit._create_speedup_kwargs(2),
+    "even_kwargs": ffmpeg_toolkit._create_jumpcut_kwargs(2, 5, 4, 6),
+}
 
-# ffmpeg_converter.cut_silence(**cut_silence_args)
+ffmpeg_toolkit.cut_silence(**cut_silence_args)
 # ff_render_task: ffmpeg_converter.FF_Create_Render = (
 #     ffmpeg_converter.FF_Create_Render_Task().merge(dir, dir / "output.mp4")
 # )
 # ffmpeg_converter.render_task(ff_render_task)
 
-# ff_render_task: FF_Create_Render = FF_Create_Render_Task().cut_silence_rerender(
-#     input_file
+# ff_render_task: ffmpeg_toolkit.FF_Create_Render = (
+#     ffmpeg_toolkit.FF_Create_Render_Task().cut_silence_rerender(input_file)
 # )
-# render_task(ff_render_task)
+# ffmpeg_toolkit.render_task(ff_render_task)
 
-ffmpeg_toolkit.cut_silence(
-    input_file,
-)
+# ffmpeg_toolkit.cut_silence(
+#     input_file,
+# )
 # (input_file.parent / "segs").mkdir(exist_ok=True)
 # ff_split_task: ffmpeg_toolkit.FF_Create_Render = (
 #     ffmpeg_toolkit.FF_Create_Render_Task().split_segments(
@@ -74,6 +79,4 @@ ffmpeg_toolkit.cut_silence(
 # ffmpeg_toolkit.render_task(ff_split_task)
 # ffmpeg_toolkit.cut_silence(
 #     input_file,
-#     even_kwargs="copy",
-#     odd_kwargs="copy",
 # )
