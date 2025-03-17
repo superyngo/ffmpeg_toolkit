@@ -17,6 +17,7 @@ import functools
 from pydantic import BaseModel, Field
 import shutil
 from itertools import batched
+from functools import partial
 
 
 class FrozenBaseModel(BaseModel):
@@ -72,6 +73,7 @@ class _tasks(StrEnum):
     CUT_SILENCE = auto()
     CUT_SILENCE_RERENDER = auto()
     SPLIT = auto()
+    PARTITION = auto()
 
 
 # basic
@@ -162,11 +164,12 @@ def _ffmpeg(**ffkwargs) -> str:
 def _ffprobe(**ffkwargs):
     logger.info(f"Executing ffprobe with {ffkwargs = }")
     command = ["ffprobe"] + _dic_to_ffmpeg_kwargs(ffkwargs)
+    logger.info(f"command: {' '.join(command)}")
     subprocess.run(command, check=True, encoding="utf-8")
 
 
 # probe
-def probe_is_valid_video(input_file: Path, **othertags) -> bool:  # command
+def probe_is_valid_video(input_file: Path, **othertags) -> bool:  #
     """Function to check if a video file is valid using ffprobe."""
     output_kwargs: dict = {
         "v": "error",
@@ -194,7 +197,7 @@ def probe_is_valid_video(input_file: Path, **othertags) -> bool:  # command
         return False
 
 
-def probe_duration(input_file: Path, **othertags) -> float:  # command
+def probe_duration(input_file: Path, **othertags) -> float:  #
     output_kwargs: dict = {
         "v": "error",
         "show_entries": "format=duration",
@@ -212,7 +215,7 @@ def probe_duration(input_file: Path, **othertags) -> float:  # command
     return float(probe_duration or 0)
 
 
-def probe_encoding(input_file: Path, **othertags) -> EncodeKwargs:  # command
+def probe_encoding(input_file: Path, **othertags) -> EncodeKwargs:  #
     output_kwargs: dict = {
         "v": "error",
         "print_format": "json",
@@ -259,7 +262,7 @@ def probe_encoding(input_file: Path, **othertags) -> EncodeKwargs:  # command
     return cleaned_None  # type: ignore
 
 
-def _probe_keyframe(input_file: Path, **othertags) -> list[float]:  # command
+def _probe_keyframe(input_file: Path, **othertags) -> list[float]:  #
     output_kwargs: dict = {
         "v": "error",
         "select_streams": "v:0",
@@ -269,6 +272,7 @@ def _probe_keyframe(input_file: Path, **othertags) -> list[float]:  # command
     } | othertags
     logger.info(f"Getting keyframe for {input_file.name} with {output_kwargs = }")
     command = ["ffprobe"] + _dic_to_ffmpeg_kwargs(output_kwargs)
+    logger.info(f"command: {' '.join(command)}")
     result = subprocess.run(
         command, capture_output=True, text=True, check=True, encoding="utf-8"
     )
@@ -500,17 +504,18 @@ class FF_Create_Render_Task(FF_Create_Render):
     def split_segments(
         self,
         input_file: Path | str,
-        video_segments: Sequence[float],
+        video_segments: Sequence[str],
         output_dir: Optional[Path | str] = None,
         input_kwargs: Optional[FF_Kwargs] = None,
         output_kwargs: Optional[FF_Kwargs] = None,
     ) -> FF_Create_Render:
+        self.task_descripton = f"{_tasks.SPLIT}"
         input_file = Path(input_file)
         if output_dir is None:
-            output_dir = input_file.parent / f"{input_file.stem}_segments"
+            output_dir = input_file.parent / f"{input_file.stem}_{self.task_descripton}"
         else:
             output_dir = Path(output_dir)
-        self.task_descripton = f"{_tasks.SPLIT}"
+        output_dir.mkdir(exist_ok=True)
         self.input_file = input_file
         self.output_file = f"{output_dir}/%d_{input_file.stem}{input_file.suffix}"
         if input_kwargs is not None:
@@ -519,7 +524,7 @@ class FF_Create_Render_Task(FF_Create_Render):
             "c:v": "copy",
             "c:a": "copy",
             "f": "segment",
-            "segment_times": ",".join(map(str, video_segments)),
+            "segment_times": ",".join(video_segments),
             "segment_format": input_file.suffix.lstrip("."),
             "reset_timestamps": "1",
         } | ({} if output_kwargs is None else output_kwargs)
@@ -535,7 +540,7 @@ def ff_render(
     output_kwargs: FF_Kwargs,
     exception: Optional[FF_Render_Exception],
     post_task: Optional[Callable[[], None]],
-) -> str | int:  # command
+) -> str | int:
     """Executeing ffmpeg with given args for different tasks
 
     Args:
@@ -616,7 +621,7 @@ def ff_render(
 
 
 # ff_render
-def render_task(  # command
+def render_task(
     Render_Tasks: FF_Create_Render,
 ) -> str | int:
     try:
@@ -657,6 +662,7 @@ def _create_speedup_kwargs(multiple: float) -> dict[str, str]:
             "shortest": "",
             "fps_mode": "vfr",
             "async": 1,
+            "reset_timestamps": "1",
         }
         | _create_force_keyframes_kwargs()
     )
@@ -690,6 +696,7 @@ def _create_jumpcut_kwargs(
             "shortest": "",
             "fps_mode": "vfr",
             "async": 1,
+            "reset_timestamps": "1",
         }
         | _create_force_keyframes_kwargs()
     )
@@ -734,7 +741,7 @@ def create_merge_txt(
 type FURTHER_KWARGS = None | FF_Kwargs
 
 
-# keep or remove copy/rendering
+# keep or remove copy/rendering by split segs
 def advanced_keep_or_remove_by_split_segs(
     input_file: Path | str,
     output_file: Path | str | None,
@@ -745,6 +752,7 @@ def advanced_keep_or_remove_by_split_segs(
     odd_kwargs: Optional[
         FURTHER_KWARGS | Literal["copy"]
     ] = "copy",  # For segments, None means remove, copy means copy
+    remove_temp_handle: bool = True,
 ) -> int:
     task_descripton = _tasks.KEEP_OR_REMOVE + "_split"
     input_file = Path(input_file)
@@ -762,7 +770,7 @@ def advanced_keep_or_remove_by_split_segs(
     )
 
     # Double every time point and convert to timestamp if needed
-    video_segments = deque(
+    video_segments = list(
         _convert_seconds_to_timestamp(s) if isinstance(s, (float, int)) else s
         for s in video_segments
     )
@@ -772,7 +780,7 @@ def advanced_keep_or_remove_by_split_segs(
 
     ff_split_task: FF_Create_Render = FF_Create_Render_Task().split_segments(
         input_file=input_file,
-        video_segments=video_segments,  # type: ignore
+        video_segments=video_segments,
         output_dir=temp_dir,
     )
     render_task(ff_split_task)
@@ -784,10 +792,14 @@ def advanced_keep_or_remove_by_split_segs(
 
     # Use ThreadPoolExecutor to manage rendreing tasks
     num_cores = os.cpu_count()
+    rerender_handle = any(
+        kwargs not in ["copy", None] for kwargs in [even_kwargs, odd_kwargs]
+    )
     further_kwargs: dict[int, FURTHER_KWARGS | Literal["copy"] | None] = {
-        0: even_kwargs,
-        1: odd_kwargs,
+        0: {} if even_kwargs == "copy" and rerender_handle else even_kwargs,
+        1: {} if odd_kwargs == "copy" and rerender_handle else odd_kwargs,
     }
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=num_cores) as executor:
         futures = []
 
@@ -834,9 +846,10 @@ def advanced_keep_or_remove_by_split_segs(
         render_task(merge_task)
 
         # Clean up temporary files and dir
-        for video in temp_dir.iterdir():
-            os.remove(video)
-        os.rmdir(temp_dir)
+        if remove_temp_handle:
+            for video in temp_dir.iterdir():
+                os.remove(video)
+            os.rmdir(temp_dir)
         return 0
 
     except Exception as e:
@@ -844,7 +857,7 @@ def advanced_keep_or_remove_by_split_segs(
         return 1
 
 
-# keep or remove copy/rendering
+# keep or remove copy/rendering by cuts
 def advanced_keep_or_remove_by_cuts(
     input_file: Path | str,
     output_file: Path | str | None,
@@ -938,11 +951,10 @@ def advanced_keep_or_remove_by_cuts(
         # Optionally, wait for all futures to complete
         # concurrent.futures.wait(futures)
 
-    # Sort the cut video paths by filename by index order
-    cut_videos.sort(key=lambda video_file: int(video_file.stem))
-
     try:
         # Merge the kept segments
+        # Sort the cut video paths by filename by index order
+        cut_videos.sort(key=lambda video_file: int(video_file.stem))
         merge_task: FF_Create_Render = FF_Create_Render_Task().merge(
             cut_videos, output_file
         )
@@ -951,6 +963,95 @@ def advanced_keep_or_remove_by_cuts(
         # Clean up temporary files and dir
         for video_path in cut_videos:
             os.remove(video_path)
+        os.rmdir(temp_dir)
+        return 0
+
+    except Exception as e:
+        logger.error(f"Failed to {task_descripton} for {input_file}. Error: {e}")
+        return 1
+
+
+# Split segments by part
+def _get_segments_from_parts_count(
+    duration: float | str, parts_count: int
+) -> Sequence[str]:
+    if isinstance(duration, str):
+        duration = _convert_timestamp_to_seconds(duration)
+
+    if parts_count <= 0:
+        raise ValueError("parts_count must be greater than 0")
+
+    segment_length = duration / parts_count
+    split_points = [
+        _convert_seconds_to_timestamp(segment_length * i) for i in range(1, parts_count)
+    ]
+
+    return split_points
+
+
+type Further_Render = Callable | partial[FF_Create_Render] | partial[Callable]
+
+
+def partion_video(
+    input_file: Path | str,
+    output_dir: Optional[Path | str] = None,
+    count: int = 5,
+    method: Optional[dict[int, Further_Render | Literal["remove"]]] = None,
+) -> int:
+    if method is None:
+        method = {}
+    if count <= 0:
+        raise ValueError("count must be greater than 0")
+    if any(key not in range(1, count + 1) for key in method.keys()):
+        raise KeyError("Method includes wrong key")
+
+    task_descripton = _tasks.PARTITION
+    input_file = Path(input_file)
+    if output_dir is None:
+        output_dir = input_file.parent / f"{input_file.stem}_{task_descripton}"
+    else:
+        output_dir = Path(output_dir)
+    output_dir.mkdir(exist_ok=True)
+
+    duration: float = probe_duration(input_file)
+    video_segments: Sequence[str] = _get_segments_from_parts_count(duration, count)
+
+    # Split videos
+    temp_dir: Path = Path(tempfile.mkdtemp())
+    ff_split_task: FF_Create_Render = FF_Create_Render_Task().split_segments(
+        input_file=input_file,
+        video_segments=video_segments,
+        output_dir=temp_dir,
+    )
+    render_task(ff_split_task)
+
+    video_files: list[Path] = sorted(
+        list(
+            video
+            for video in temp_dir.glob("*")
+            if video.suffix.lstrip(".") in VideoSuffix
+        ),
+        key=lambda video: int(str(video.stem).split("_")[0]),
+    )
+
+    try:
+        for video in video_files:
+            i_remainder = int(video.stem.split("_")[0])
+            _method: Further_Render | Literal["remove"] | None = method.get(
+                i_remainder + 1, None
+            )
+            logger.info(f"{i_remainder = }, {_method = }")
+            if _method == "remove":
+                os.remove(video)
+                continue
+
+            if _method is not None:
+                ff_render_task = _method(input_file=video, output_file=video)
+                render_task(ff_render_task)
+
+            output_path = output_dir / video.name
+            shutil.move(str(video), str(output_path))
+
         os.rmdir(temp_dir)
         return 0
 
