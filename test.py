@@ -14,7 +14,7 @@ bin_path = current_file_path.parent / "bin"
 os.environ["PATH"] = a = str(bin_path) + os.pathsep + os.environ["PATH"]
 
 
-input_file = Path(r"C:\Users\user\Downloads\IMG_2180.mp4")
+input_file = Path(r"F:\Users\user\Downloads\IMG_2078.mp4")
 # input_file = Path(r"C:\Users\user\Downloads\IMG_2078.mp4")
 dir = Path(r"C:\Users\user\AppData\Local\Temp\tmpsn52hpxj")
 
@@ -76,9 +76,26 @@ dir = Path(r"C:\Users\user\AppData\Local\Temp\tmpsn52hpxj")
 # )
 # ffmpeg_toolkit.render_task(ff_render_task)
 
-ffmpeg_toolkit.cut_silence(
-    input_file,
-)
+
+# patition_config = ffmpeg_toolkit.Partition_Config(
+#     portion_method=[
+#         (2, ffmpeg_toolkit.partial_tasks.speedup(multiple=2)),
+#         (4, ffmpeg_toolkit.partial_tasks.speedup(multiple=4)),
+#         (8, ffmpeg_toolkit.partial_tasks.speedup(multiple=8)),
+#         (16, ffmpeg_toolkit.partial_tasks.speedup(multiple=16)),
+#     ]
+# )
+
+# ffmpeg_toolkit.cut_silence(
+#     input_file,
+#     # even_further=ffmpeg_toolkit.partial_tasks.speedup(multiple=10),
+#     odd_further=ffmpeg_toolkit.partial_tasks.partion_video(
+#         partition_config=patition_config
+#     ),
+#     even_further=ffmpeg_toolkit.partial_tasks.partion_video(
+#         partition_config=patition_config
+#     ),
+# )
 # (input_file.parent / "segs").mkdir(exist_ok=True)
 # ff_split_task: ffmpeg_toolkit.FF_Create_Render = (
 #     ffmpeg_toolkit.FF_Create_Render_Task().split_segments(
@@ -93,16 +110,21 @@ ffmpeg_toolkit.cut_silence(
 # )
 
 
-# further_speedup_4x = ffmpeg_toolkit.my_partial_task(
-#     task=ffmpeg_toolkit.FF_Create_Render_Task().speedup, multiple=4
-# )
-# further_speedup_10x = ffmpeg_toolkit.my_partial_task(
-#     task=ffmpeg_toolkit.FF_Create_Render_Task().speedup, multiple=10
-# )
-# partition_config = ffmpeg_toolkit.Partition_Config(
-#     portion_method=[(5, further_speedup_4x), (1, "remove"), 1, (5, further_speedup_10x)]
-# )
-# ffmpeg_toolkit.partion_video(input_file, partition_config)
+partition_config = ffmpeg_toolkit.Partition_Config(
+    portion_method=[
+        (
+            5,
+            ffmpeg_toolkit.partial_tasks.cut_silence(
+                odd_further=ffmpeg_toolkit.partial_tasks.custom()
+            ),
+        ),
+        (1, "remove"),
+        (5, ffmpeg_toolkit.partial_tasks.cut_silence_rerender()),
+    ]
+)
+ffmpeg_toolkit.partion_video(
+    input_file, partition_config, output_file=input_file.parent / "rendered.mkv"
+)
 
 
 # code.interact(local=globals())
