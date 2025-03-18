@@ -1,5 +1,16 @@
 # import ffmpeg
-from typing import Iterable, Sequence, Optional, Callable, Literal, Mapping, TypedDict
+from typing import (
+    Any,
+    Iterable,
+    NotRequired,
+    Sequence,
+    Optional,
+    Callable,
+    Literal,
+    Mapping,
+    TypedDict,
+)
+from types import MethodType, FunctionType
 from pathlib import Path
 from enum import StrEnum, auto
 from collections import deque
@@ -14,10 +25,9 @@ import concurrent.futures
 import json
 from ffmpeg_types import EncodeKwargs, VideoSuffix
 import functools
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 import shutil
-from itertools import batched
-from functools import partial
+from itertools import batched, accumulate
 
 
 class FrozenBaseModel(BaseModel):
@@ -288,7 +298,8 @@ def _probe_keyframe(input_file: Path, **othertags) -> list[float]:  #
 # converting core
 class FF_Render_Exception(TypedDict):
     code: int
-    meaasge: str
+    message: str
+    hook: NotRequired[Callable[[], Any]]
 
 
 class FF_Create_Command(BaseModel):
@@ -367,13 +378,13 @@ class FF_Create_Render_Task(FF_Create_Render):
             if input_file != output_file:
                 self.exception = {
                     "code": 0,
-                    "meaasge": "Speedup multiple 1, only replace target file",
+                    "message": "Speedup multiple 1, only replace target file",
                 }
 
         if multiple <= 0:
             self.exception = {
                 "code": 1,
-                "meaasge": "Speedup factor must be greater than 0.",
+                "message": "Speedup factor must be greater than 0.",
             }
 
         return self
@@ -402,13 +413,13 @@ class FF_Create_Render_Task(FF_Create_Render):
         if any((b1_duration <= 0, b2_duration <= 0)):
             self.exception = {
                 "code": 1,
-                "meaasge": "Both parts' durations must be greater than 0.",
+                "message": "Both parts' durations must be greater than 0.",
             }
 
         if any((b1_multiple < 0, b2_multiple < 0)):
             self.exception = {
                 "code": 2,
-                "meaasge": "Both multiples must be greater or equal to 0 (0 means remove).",
+                "message": "Both multiples must be greater or equal to 0 (0 means remove).",
             }
 
         return self
@@ -529,7 +540,19 @@ class FF_Create_Render_Task(FF_Create_Render):
             "reset_timestamps": "1",
         } | ({} if output_kwargs is None else output_kwargs)
 
+        if len(video_segments) == 0:
+            self.exception = {
+                "code": 9,
+                "message": f"No video segments provided, just copy {input_file} to {output_dir}",
+                "hook": lambda: shutil.copy2(
+                    input_file, output_dir / f"0_{input_file.name}"
+                ),
+            }
+
         return self
+
+    def render(self):
+        render_task(self)
 
 
 def ff_render(
@@ -584,9 +607,11 @@ def ff_render(
         match exception["code"]:
             case 0:
                 shutil.copyfile(input_file, output_file)
+            case 9:
+                exception.get("hook", lambda: None)()
             case _:
                 pass
-        logger.error(exception["meaasge"])
+        logger.error(exception["message"])
         return exception["code"]
 
     # Generate ff kwargs in
@@ -739,6 +764,27 @@ def create_merge_txt(
 
 
 type FURTHER_KWARGS = None | FF_Kwargs
+type Further_Render = Callable[[str | Path], Any]
+
+
+def my_partial_task(
+    task: MethodType | FunctionType | Callable, **config
+) -> Further_Render:
+    if (
+        isinstance(task, MethodType)
+        and task.__self__.__class__ == FF_Create_Render_Task
+    ):
+
+        def _partial(input_file: str | Path) -> Any:
+            return task(
+                input_file=input_file, output_file=input_file, **config
+            ).render()
+    else:
+
+        def _partial(input_file: str | Path) -> Any:
+            return task(input_file=input_file, output_file=input_file, **config)
+
+    return _partial
 
 
 # keep or remove copy/rendering by split segs
@@ -747,11 +793,11 @@ def advanced_keep_or_remove_by_split_segs(
     output_file: Path | str | None,
     video_segments: Sequence[str] | Sequence[float],
     even_kwargs: Optional[
-        FURTHER_KWARGS | Literal["copy"]
-    ] = None,  # For other segments, None means remove, copy means copy
+        FURTHER_KWARGS | Literal["remove"]
+    ] = "remove",  # For other segments, remove means remove, None means copy
     odd_kwargs: Optional[
-        FURTHER_KWARGS | Literal["copy"]
-    ] = "copy",  # For segments, None means remove, copy means copy
+        FURTHER_KWARGS | Literal["remove"]
+    ] = None,  # For segments, remove means remove, None means copy
     remove_temp_handle: bool = True,
 ) -> int:
     task_descripton = _tasks.KEEP_OR_REMOVE + "_split"
@@ -793,11 +839,11 @@ def advanced_keep_or_remove_by_split_segs(
     # Use ThreadPoolExecutor to manage rendreing tasks
     num_cores = os.cpu_count()
     rerender_handle = any(
-        kwargs not in ["copy", None] for kwargs in [even_kwargs, odd_kwargs]
+        kwargs not in ["remove", None] for kwargs in [even_kwargs, odd_kwargs]
     )
-    further_kwargs: dict[int, FURTHER_KWARGS | Literal["copy"] | None] = {
-        0: {} if even_kwargs == "copy" and rerender_handle else even_kwargs,
-        1: {} if odd_kwargs == "copy" and rerender_handle else odd_kwargs,
+    further_kwargs: dict[int, FURTHER_KWARGS | Literal["remove"] | None] = {
+        0: {} if even_kwargs is None and rerender_handle else even_kwargs,
+        1: {} if odd_kwargs is None and rerender_handle else odd_kwargs,
     }
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=num_cores) as executor:
@@ -808,12 +854,12 @@ def advanced_keep_or_remove_by_split_segs(
             i_remainder = index % 2
 
             # remove unwanted segments
-            if further_kwargs[i_remainder] is None:
+            if further_kwargs[i_remainder] == "remove":
                 os.remove(video)
                 continue
 
             # Skip further rendering if the segment is to be copied
-            if further_kwargs[i_remainder] == "copy":
+            if further_kwargs[i_remainder] is None:
                 continue
 
             # Further render the segment with giver kwargs
@@ -863,11 +909,11 @@ def advanced_keep_or_remove_by_cuts(
     output_file: Path | str | None,
     video_segments: Sequence[str] | Sequence[float],
     even_kwargs: Optional[
-        FURTHER_KWARGS | Literal["copy"]
-    ] = None,  # For other segments, None means remove, copy means copy
+        FURTHER_KWARGS | Literal["remove"]
+    ] = "remove",  # For other segments, remove means remove, None means copy
     odd_kwargs: Optional[
-        FURTHER_KWARGS | Literal["copy"]
-    ] = "copy",  # For segments, None means remove, copy means copy
+        FURTHER_KWARGS | Literal["remove"]
+    ] = None,  # For segments, remove means remove, None means copy
 ) -> int:
     task_descripton = _tasks.KEEP_OR_REMOVE
     input_file = Path(input_file)
@@ -899,7 +945,7 @@ def advanced_keep_or_remove_by_cuts(
     temp_dir: Path = Path(tempfile.mkdtemp())
     num_cores = os.cpu_count()
     cut_videos = []
-    further_kwargs: dict[int, FURTHER_KWARGS | Literal["copy"] | None] = {
+    further_kwargs: dict[int, FURTHER_KWARGS | Literal["remove"] | None] = {
         0: even_kwargs,
         1: odd_kwargs,
     }
@@ -910,7 +956,7 @@ def advanced_keep_or_remove_by_cuts(
             i_remainder = i % 2
 
             # remove unwanted segments
-            if further_kwargs[i_remainder] is None:
+            if further_kwargs[i_remainder] == "remove":
                 continue
 
             # cut segments by submitting cut task to the executor
@@ -934,7 +980,7 @@ def advanced_keep_or_remove_by_cuts(
             future.result()  # Ensures `cut` completes before proceeding
 
             # Skip further rendering if the segment is to be copied
-            if further_kwargs[i_remainder] == "copy":
+            if further_kwargs[i_remainder] is None:
                 continue
 
             # Further render the segment with giver kwargs
@@ -973,37 +1019,74 @@ def advanced_keep_or_remove_by_cuts(
 
 # Split segments by part
 def _get_segments_from_parts_count(
-    duration: float | str, parts_count: int
+    duration: float | str, parts_count: int, portion: Optional[list[int]] = None
 ) -> Sequence[str]:
-    if isinstance(duration, str):
-        duration = _convert_timestamp_to_seconds(duration)
-
     if parts_count <= 0:
         raise ValueError("parts_count must be greater than 0")
 
+    if isinstance(duration, str):
+        duration = _convert_timestamp_to_seconds(duration)
+
+    if portion is None:
+        portion = [1] * parts_count
+    # Error hadling
+    if sum(portion) != parts_count:
+        raise ValueError(
+            f"Sum of portions ({sum(portion)}) must equal to parts_count ({parts_count})"
+        )
+
     segment_length = duration / parts_count
     split_points = [
-        _convert_seconds_to_timestamp(segment_length * i) for i in range(1, parts_count)
+        _convert_seconds_to_timestamp(segment_length * ap)
+        for ap in accumulate(p for p in portion[:-1])
     ]
 
     return split_points
 
 
-type Further_Render = Callable | partial[FF_Create_Render] | partial[Callable]
+type Method = Further_Render | Literal["remove"] | None
+type Portion_Method_Specific = list[tuple[int, Method]] | list[tuple[int, None]]
+type Portion_Method = Portion_Method_Specific | list[tuple[int, Method] | int]
+
+
+class Partition_Config(BaseModel):
+    model_config = {"arbitrary_types_allowed": True}
+    count: int = Field(default=0, gt=0)
+    portion_method: Optional[Portion_Method] = None
+
+    def model_post_init(self, *args, **kwargs):
+        if self.count == 0 and self.portion_method is None:
+            self.count = 3
+        if self.count == 0 and self.portion_method is not None:
+            self.count = sum(p[0] for p in self.portion_method)  # type: ignore
+        if self.portion_method is None:
+            self.portion_method = [(1, None)] * self.count
+
+    @field_validator("portion_method")
+    @classmethod
+    def validate_portion_sum(
+        cls, portion_method: Portion_Method, info
+    ) -> Portion_Method_Specific:
+        if portion_method is not None:
+            _portion_method: Portion_Method_Specific = [
+                (p, None) if isinstance(p, int) else p for p in portion_method
+            ]
+            if (_sum := sum(p[0] for p in _portion_method)) != (
+                _count := info.data["count"]
+            ) and info.data["count"] != 0:
+                raise ValueError(
+                    f"Sum of portions ({_sum}) must equal to count ({_count})"
+                )
+            return _portion_method
 
 
 def partion_video(
     input_file: Path | str,
+    partition_config: Optional[Partition_Config] = None,
     output_dir: Optional[Path | str] = None,
-    count: int = 5,
-    method: Optional[dict[int, Further_Render | Literal["remove"]]] = None,
 ) -> int:
-    if method is None:
-        method = {}
-    if count <= 0:
-        raise ValueError("count must be greater than 0")
-    if any(key not in range(1, count + 1) for key in method.keys()):
-        raise KeyError("Method includes wrong key")
+    if partition_config is None:
+        partition_config = Partition_Config()
 
     task_descripton = _tasks.PARTITION
     input_file = Path(input_file)
@@ -1014,7 +1097,15 @@ def partion_video(
     output_dir.mkdir(exist_ok=True)
 
     duration: float = probe_duration(input_file)
-    video_segments: Sequence[str] = _get_segments_from_parts_count(duration, count)
+    video_segments: Sequence[str] = _get_segments_from_parts_count(
+        duration,
+        partition_config.count,
+        [p[0] for p in partition_config.portion_method],  # type: ignore
+    )
+    logger.info(f"{video_segments = }")
+    logger.info(
+        f"{task_descripton.capitalize()} {input_file.name} to {output_dir} with {partition_config}."
+    )
 
     # Split videos
     temp_dir: Path = Path(tempfile.mkdtemp())
@@ -1034,20 +1125,19 @@ def partion_video(
         key=lambda video: int(str(video.stem).split("_")[0]),
     )
 
+    # Further render videos
     try:
         for video in video_files:
             i_remainder = int(video.stem.split("_")[0])
-            _method: Further_Render | Literal["remove"] | None = method.get(
-                i_remainder + 1, None
+            _method: Method = (
+                partition_config.portion_method[i_remainder][1]  # type: ignore
             )
-            logger.info(f"{i_remainder = }, {_method = }")
             if _method == "remove":
                 os.remove(video)
                 continue
 
             if _method is not None:
-                ff_render_task = _method(input_file=video, output_file=video)
-                render_task(ff_render_task)
+                _method(input_file=video)
 
             output_path = output_dir / video.name
             shutil.move(str(video), str(output_path))
@@ -1237,11 +1327,11 @@ def cut_silence(
     sl_duration: float = 0.2,
     seg_min_duration: float = 0,
     even_kwargs: Optional[
-        FURTHER_KWARGS | Literal["copy"]
-    ] = None,  # For other segments, None means remove, copy means copy
+        FURTHER_KWARGS | Literal["remove"]
+    ] = "remove",  # For other segments, None means copy, remove means remove
     odd_kwargs: Optional[
-        FURTHER_KWARGS | Literal["copy"]
-    ] = "copy",  # For segments, None means remove, copy means copy
+        FURTHER_KWARGS | Literal["remove"]
+    ] = None,  # For other segments, None means copy, remove means remove
 ) -> int | Enum:
     class error_code(Enum):
         DURATION_LESS_THAN_ZERO = auto()
