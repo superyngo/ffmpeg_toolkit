@@ -79,8 +79,10 @@ class _tasks(StrEnum):
     PROBE_DURATION = auto()
     PROBE_IS_VALID_VIDEO = auto()
     GET_NON_SILENCE_SEGS = auto()
+    GET_MOTION_SEGS = auto()
     CUT_SILENCE = auto()
     CUT_SILENCE_RERENDER = auto()
+    CUT_MOTIONLESS = auto()
     SPLIT = auto()
     PARTITION = auto()
 
@@ -159,7 +161,7 @@ def _dic_to_ffmpeg_kwargs(kwargs: dict | None = None) -> list[str]:
 def _ffmpeg(**ffkwargs) -> str:
     logger.info(f"Executing FFmpeg with {ffkwargs = }")
     command = ["ffmpeg"] + _dic_to_ffmpeg_kwargs(ffkwargs)
-    logger.info(f"command: {' '.join(command)}")
+    # logger.info(f"command: {' '.join(command)}")
     try:
         result = subprocess.run(
             command, capture_output=True, text=True, check=True, encoding="utf-8"
@@ -173,7 +175,7 @@ def _ffmpeg(**ffkwargs) -> str:
 def _ffprobe(**ffkwargs):
     logger.info(f"Executing ffprobe with {ffkwargs = }")
     command = ["ffprobe"] + _dic_to_ffmpeg_kwargs(ffkwargs)
-    logger.info(f"command: {' '.join(command)}")
+    # logger.info(f"command: {' '.join(command)}")
     subprocess.run(command, check=True, encoding="utf-8")
 
 
@@ -281,7 +283,7 @@ def _probe_keyframe(input_file: Path, **othertags) -> list[float]:  #
     } | othertags
     logger.info(f"Getting keyframe for {input_file.name} with {output_kwargs = }")
     command = ["ffprobe"] + _dic_to_ffmpeg_kwargs(output_kwargs)
-    logger.info(f"command: {' '.join(command)}")
+    # logger.info(f"command: {' '.join(command)}")
     result = subprocess.run(
         command, capture_output=True, text=True, check=True, encoding="utf-8"
     )
@@ -292,6 +294,27 @@ def _probe_keyframe(input_file: Path, **othertags) -> list[float]:  #
         if "K" in packet["flags"]
     ]
     return keyframe_pts
+
+
+def _probe_frame_per_s(input_file: Path, **othertags) -> str:
+    # ffprobe -v error -select_streams v -show_entries stream=r_frame_rate -of csv=p=0 -i "C:\Users\user\Downloads\2025-02-17_1739743880_merged.mp4"
+    output_kwargs: dict = {
+        "v": "error",
+        "select_streams": "v",
+        "show_entries": "stream=r_frame_rate",
+        "of": "csv=p=0",
+        "i": input_file,
+    } | othertags
+    logger.info(
+        f"Getting frame per second for {input_file.name} with {output_kwargs = }"
+    )
+    command = ["ffprobe"] + _dic_to_ffmpeg_kwargs(output_kwargs)
+    # logger.info(f"command: {' '.join(command)}")
+    result = subprocess.run(
+        command, capture_output=True, text=True, check=True, encoding="utf-8"
+    ).stdout.strip()
+
+    return result
 
 
 # converting core
@@ -463,7 +486,7 @@ class FF_Create_Render_Task(FF_Create_Render):
         self,
         input_file: Path | str,
         dB: int = -21,
-        sl_duration: float = 0.2,
+        sampling_duration: float = 0.2,
         input_kwargs: Optional[FF_Kwargs] = None,
         output_kwargs: Optional[FF_Kwargs] = None,
     ) -> FF_Create_Render:
@@ -474,10 +497,10 @@ class FF_Create_Render_Task(FF_Create_Render):
             self.input_kwargs = input_kwargs
         self.output_kwargs = (
             {
-                "af": f"silencedetect=n={dB}dB:d={sl_duration}",
-                "c:v": "copy",
-                "f": "null",
+                "af": f"silencedetect=n={dB}dB:d={sampling_duration}",
+                "vn": "",
                 "loglevel": "info",
+                "f": "null",
             }
             | ({} if output_kwargs is None else output_kwargs)
             | {"": ""}
@@ -490,7 +513,7 @@ class FF_Create_Render_Task(FF_Create_Render):
         input_file: Path | str,
         output_file: Path | str | None = None,
         dB: int = -21,
-        sl_duration: float = 0.2,
+        sampling_duration: float = 0.2,
         input_kwargs: Optional[FF_Kwargs] = None,
         output_kwargs: Optional[FF_Kwargs] = None,
     ) -> FF_Create_Render:
@@ -500,7 +523,7 @@ class FF_Create_Render_Task(FF_Create_Render):
         if input_kwargs is not None:
             self.input_kwargs = input_kwargs
         self.output_kwargs = output_kwargs = _create_cut_sl_kwargs(
-            input_file, dB, sl_duration
+            input_file, dB, sampling_duration
         ) | ({} if output_kwargs is None else output_kwargs)
 
         def post_task():
@@ -550,8 +573,35 @@ class FF_Create_Render_Task(FF_Create_Render):
 
         return self
 
-    def render(self):
-        render_task(self)
+    def render(self) -> Any:
+        return render_task(self)
+
+    def get_motion_segs(
+        self,
+        input_file: Path | str,
+        sampling_duration: float = 0.2,
+        input_kwargs: Optional[FF_Kwargs] = None,
+        output_kwargs: Optional[FF_Kwargs] = None,
+    ) -> FF_Create_Render:
+        self.task_descripton = f"{_tasks.GET_MOTION_SEGS}"
+        self.input_file = input_file = Path(input_file)
+        self.output_file = Path()
+        if input_kwargs is not None:
+            self.input_kwargs = input_kwargs
+        frame_per_second: str = _probe_frame_per_s(input_file)
+        self.output_kwargs = (
+            {
+                "hide_banner": "",
+                "vf": f"select='not(mod(n,floor({frame_per_second})*{sampling_duration}))*gte(scene,0)',metadata=print",
+                "an": "",
+                "loglevel": "info",
+                "f": "null",
+            }
+            | ({} if output_kwargs is None else output_kwargs)
+            | {"": ""}
+        )
+
+        return self
 
 
 def ff_render(
@@ -1122,7 +1172,7 @@ def partion_video(
 
 # ff_render: cut silence copy / render
 # Extract non silence segments info
-def _extract_non_silence_segs_info(
+def _extract_non_silence_info(
     non_silence_segs_str: str,
 ) -> tuple[Sequence[float], float, float]:
     # Total duration
@@ -1130,8 +1180,10 @@ def _extract_non_silence_segs_info(
     total_duration_match: str | None = re.findall(
         total_duration_pattern, non_silence_segs_str
     )[0]
-    total_duration: float = _convert_timestamp_to_seconds(
-        total_duration_match if total_duration_match else "0.0"
+    total_duration: float = (
+        _convert_timestamp_to_seconds(total_duration_match)
+        if total_duration_match
+        else 0.0
     )
 
     # Regular expression to find all floats after "silence_start or end: "
@@ -1157,6 +1209,55 @@ def _extract_non_silence_segs_info(
     total_silence_duration: float = sum(silence_duration_matches)
 
     return (non_silence_segs, total_duration, total_silence_duration)
+
+
+# Motion detect
+def _extract_motion_info(
+    motion_segs_str: str,
+) -> tuple[dict[float, float], float]:
+    # Total duration
+    total_duration_pattern = r"Duration: (.+?),"
+    total_duration_match: str | None = re.findall(
+        total_duration_pattern, motion_segs_str
+    )[0]
+    total_duration: float = (
+        _convert_timestamp_to_seconds(total_duration_match)
+        if total_duration_match
+        else 0.0
+    )
+
+    # Regular expression to find all floats after "pts_time:"
+    motion_seg_pattern = r"pts_time:([0-9.]+)"
+    # Find all matches in the log data
+    motion_seg_matches: list[str] = re.findall(motion_seg_pattern, motion_segs_str)
+    # Convert matches to a list of floats
+    motion_segs: list[float] = list(float(match) for match in motion_seg_matches)
+
+    # Regular expression to find all floats after "lavfi.scene_score="
+    scene_score_pattern = r"lavfi.scene_score=([0-9.]+)"
+    scene_score_matches: list[str] | Generator[float] = re.findall(
+        scene_score_pattern, motion_segs_str
+    )
+    scene_score_segs = list(float(s) for s in scene_score_matches)
+
+    motion_segs_dict: dict[float, float] = dict(zip(motion_segs, scene_score_segs))
+
+    return (motion_segs_dict, total_duration)
+
+
+def _extract_motion_segments(
+    motion_info: dict[float, float], threshold: float = 0.0095
+) -> list[float]:
+    break_points = [0.0]
+    prev_above = False  # Track if last added was above the threshold
+
+    for _time, score in motion_info.items():
+        if (score > threshold and not prev_above) or (
+            score <= threshold and prev_above
+        ):
+            break_points.append(_time)
+            prev_above = score > threshold  # Update the flag
+    return break_points
 
 
 def _adjust_segments_to_keyframes(
@@ -1289,12 +1390,44 @@ def _merge_overlapping_segments(segments: Sequence[float]) -> Sequence[float]:
     return merged_segments
 
 
+class AdjustSegmentsConfig(BaseModel):
+    segments: Sequence[float]
+    seg_min_duration: float = 0
+    total_duration: float
+    keyframe: Sequence[float]
+
+
+def _adjust_segments_pipe(
+    adjusted_segments_config: AdjustSegmentsConfig,
+) -> Sequence[float]:
+    ensured_minimum: Sequence[float] = _ensure_minimum_segment_length(
+        adjusted_segments_config.segments,
+        adjusted_segments_config.seg_min_duration,
+        adjusted_segments_config.total_duration,
+    )
+
+    adjusted_segments: Sequence[float] = _adjust_segments_to_keyframes(
+        ensured_minimum,
+        adjusted_segments_config.keyframe,
+    )
+
+    if len(adjusted_segments) % 2 == 1:
+        adjusted_segments = list(adjusted_segments)
+        adjusted_segments.append(adjusted_segments_config.total_duration)
+
+    merged_overlapping_segments: Sequence[float] = _merge_overlapping_segments(
+        adjusted_segments
+    )
+
+    return merged_overlapping_segments
+
+
 @timing
 def cut_silence(
     input_file: Path | str,
     output_file: Path | str | None = None,
     dB: int = -21,
-    sl_duration: float = 0.2,
+    sampling_duration: float = 0.2,
     seg_min_duration: float = 0,
     even_further: Further_Method = "remove",  # For other segments, remove means remove, None means copy
     odd_further: Further_Method = None,  # For segments, remove means remove, None means copy
@@ -1304,7 +1437,7 @@ def cut_silence(
         NO_VALID_SEGMENTS = auto()
         FAILED_TO_CUT = auto()
 
-    if sl_duration <= 0:
+    if sampling_duration <= 0:
         logger.error("Duration must be greater than 0.")
         return error_code.DURATION_LESS_THAN_ZERO
 
@@ -1323,28 +1456,28 @@ def cut_silence(
     )
 
     logger.info(
-        f"{task_descripton.capitalize()} {input_file} to {output_file} with {dB = } ,{sl_duration = }, {seg_min_duration = }."
+        f"{task_descripton.capitalize()} {input_file} to {output_file} with {dB = } ,{sampling_duration = }, {seg_min_duration = }."
     )
 
     get_silence_segs_task: FF_Create_Render = FF_Create_Render_Task().get_silence_segs(
-        input_file=input_file, dB=dB, sl_duration=sl_duration
+        input_file=input_file, dB=dB, sampling_duration=sampling_duration
     )
     non_silence_str: str = str(render_task(get_silence_segs_task))
-    non_silence_segments, total_duration, _ = _extract_non_silence_segs_info(
-        non_silence_str
+    non_silence_segments, total_duration, _ = _extract_non_silence_info(non_silence_str)
+    logger.info(f"{non_silence_segments = }")
+
+    keyframe = _probe_keyframe(input_file)
+
+    adjusted_segments_config = AdjustSegmentsConfig(
+        segments=non_silence_segments,
+        seg_min_duration=seg_min_duration,
+        total_duration=total_duration,
+        keyframe=keyframe,
     )
 
-    adjusted_segments: Sequence[float] = _adjust_segments_to_keyframes(
-        _ensure_minimum_segment_length(
-            non_silence_segments, seg_min_duration, total_duration
-        ),
-        _probe_keyframe(input_file),
-    )
+    adjusted_segments: Sequence[float] = _adjust_segments_pipe(adjusted_segments_config)
 
-    merged_overlapping_segments: Sequence[float] = _merge_overlapping_segments(
-        adjusted_segments
-    )
-    if merged_overlapping_segments == []:
+    if adjusted_segments == []:
         logger.error(f"No valid segments found for {input_file}.")
         return error_code.NO_VALID_SEGMENTS
 
@@ -1352,7 +1485,83 @@ def cut_silence(
         advanced_keep_or_remove_by_split_segs(
             input_file=input_file,
             output_file=temp_output_file,
-            video_segments=merged_overlapping_segments,
+            video_segments=adjusted_segments,
+            even_further=even_further,
+            odd_further=odd_further,
+        )
+        temp_output_file.replace(output_file)
+        return 0
+
+    except Exception as e:
+        logger.error(f"Failed to {task_descripton} for {input_file}. Error: {e}")
+        raise e
+        # return error_code.FAILED_TO_CUT
+
+
+@timing
+def cut_motionless(
+    input_file: Path | str,
+    output_file: Path | str | None = None,
+    threshold: float = 0.0095,
+    sampling_duration: float = 0.2,
+    seg_min_duration: float = 0,
+    even_further: Further_Method = "remove",  # For other segments, remove means remove, None means copy
+    odd_further: Further_Method = None,  # For segments, remove means remove, None means copy
+) -> int | Enum:
+    class error_code(Enum):
+        DURATION_LESS_THAN_ZERO = auto()
+        NO_VALID_SEGMENTS = auto()
+        FAILED_TO_CUT = auto()
+
+    if sampling_duration <= 0:
+        logger.error("Duration must be greater than 0.")
+        return error_code.DURATION_LESS_THAN_ZERO
+
+    # init task
+    task_descripton = f"{_tasks.CUT_MOTIONLESS}_by_{threshold}"
+    input_file = Path(input_file)
+
+    if output_file is None:
+        output_file = input_file.parent / (
+            input_file.stem + "_" + task_descripton + input_file.suffix
+        )
+    else:
+        output_file = Path(output_file)
+    temp_output_file: Path = output_file.parent / (
+        output_file.stem + "_processing" + output_file.suffix
+    )
+
+    logger.info(
+        f"{task_descripton.capitalize()} {input_file} to {output_file} with {threshold = } ,{sampling_duration = }, {seg_min_duration = }."
+    )
+
+    get_motion_segs_task: FF_Create_Render = FF_Create_Render_Task().get_motion_segs(
+        input_file=input_file, sampling_duration=sampling_duration
+    )
+    motion_str: str = str(render_task(get_motion_segs_task))
+    motion_info, total_duration = _extract_motion_info(motion_str)
+    motion_segs = _extract_motion_segments(motion_info, threshold)
+
+    keyframe = _probe_keyframe(input_file)
+
+    adjusted_segments_config = AdjustSegmentsConfig(
+        segments=motion_segs,
+        seg_min_duration=seg_min_duration,
+        total_duration=total_duration,
+        keyframe=keyframe,
+    )
+
+    adjusted_segments: Sequence[float] = _adjust_segments_pipe(adjusted_segments_config)
+
+    if adjusted_segments == []:
+        logger.error(f"No valid segments found for {input_file}.")
+        return error_code.NO_VALID_SEGMENTS
+
+    try:
+        advanced_keep_or_remove_by_split_segs(
+            input_file=input_file,
+            output_file=temp_output_file,
+            video_segments=adjusted_segments,
             even_further=even_further,
             odd_further=odd_further,
         )
@@ -1392,14 +1601,16 @@ def _create_cut_sl_filter_tempfile(
     return path
 
 
-def _create_cut_sl_kwargs(input_file: Path | str, dB: int, sl_duration: float) -> dict:
+def _create_cut_sl_kwargs(
+    input_file: Path | str, dB: int, sampling_duration: float
+) -> dict:
     get_silence_segs_task: FF_Create_Render = FF_Create_Render_Task().get_silence_segs(
-        input_file=input_file, dB=dB, sl_duration=sl_duration
+        input_file=input_file, dB=dB, sampling_duration=sampling_duration
     )
     non_silence_str: str = str(render_task(get_silence_segs_task))
-    non_silence_segments: Sequence[float] = _extract_non_silence_segs_info(
-        non_silence_str
-    )[0]
+    non_silence_segments: Sequence[float] = _extract_non_silence_info(non_silence_str)[
+        0
+    ]
 
     class CSFiltersInfo(Enum):
         VIDEO = [
