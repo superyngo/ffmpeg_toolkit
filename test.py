@@ -14,7 +14,7 @@ bin_path = current_file_path.parent / "bin"
 os.environ["PATH"] = a = str(bin_path) + os.pathsep + os.environ["PATH"]
 
 
-input_file = Path(r"C:\Users\user\Downloads\IMG_2180.mp4")
+input_file = Path(r"F:\Users\user\Downloads\IMG_2078.mp4")
 # input_file = Path(r"C:\Users\user\Downloads\IMG_2078.mp4")
 dir = Path(r"C:\Users\user\AppData\Local\Temp\tmpsn52hpxj")
 
@@ -26,6 +26,7 @@ dir = Path(r"C:\Users\user\AppData\Local\Temp\tmpsn52hpxj")
 #     "b2_multiple": 10.5,
 # }
 # ffmpeg_toolkit.FFRenderTasks().jumpcut(**jumpcut_args).render()
+# ffmpeg_toolkit.FFRenderTasks().speedup(input_file=input_file, multiple=5).render()
 
 
 # ffmpeg_toolkit.FFRenderTasks().cut_silence_rerender(input_file).render()

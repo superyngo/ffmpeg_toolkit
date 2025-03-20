@@ -1040,11 +1040,11 @@ def advanced_keep_or_remove_by_split_segs(
         }
 
         # Use ThreadPoolExecutor to manage rendreing tasks
-        futures = []
         # Create the executor once for all tasks
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=DEFAULTS.num_cores.value
         ) as executor:
+            futures = []
             for video in splitted_videos:
                 index = int(video.stem.split("_")[0])
                 i_remainder = index % 2
