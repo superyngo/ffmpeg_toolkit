@@ -37,8 +37,8 @@ dir = Path(r"C:\Users\user\AppData\Local\Temp\tmpsn52hpxj")
 #     "input_file": input_file,
 #     "threshold": 0.005,
 #     "odd_further": ffmpeg_toolkit.PARTIAL_TASKS.custom(),
-# }
-# ffmpeg_toolkit.cut_motionless(**cut_motionless_config)
+# # }
+# # # ffmpeg_toolkit.cut_motionless(**cut_motionless_config)
 ffmpeg_toolkit.cut_silence(
     input_file,
     odd_further=ffmpeg_toolkit.PARTIAL_TASKS.custom(),
@@ -48,22 +48,19 @@ ffmpeg_toolkit.cut_silence(
 
 # partition_config = ffmpeg_toolkit.PartitionConfig(
 #     portion_method=[
-#         # (
-#         #     5,
-#         #     ffmpeg_toolkit.PARTIAL_TASKS.cut_silence(
-#         #         odd_further=ffmpeg_toolkit.PARTIAL_TASKS.speedup(multiple=2)
-#         #     ),
-#         # ),
-#         # (5, ffmpeg_toolkit.PARTIAL_TASKS.speedup()),
-#         # (5, ffmpeg_toolkit.PARTIAL_TASKS.jumpcut()),
-#         (5, ffmpeg_toolkit.PARTIAL_TASKS.cut_motionless(threshold=0.005)),
-#         (
-#             5,
-#             ffmpeg_toolkit.PARTIAL_TASKS.cut_silence(
-#                 odd_further=ffmpeg_toolkit.PARTIAL_TASKS.custom()
-#             ),
-#         ),
-#         (5, ffmpeg_toolkit.PARTIAL_TASKS.cut_silence_rerender()),
+#         (1, ffmpeg_toolkit.PARTIAL_TASKS.custom()),
+#         (1, ffmpeg_toolkit.PARTIAL_TASKS.custom()),
+#         (1, ffmpeg_toolkit.PARTIAL_TASKS.custom()),
+#         (1, ffmpeg_toolkit.PARTIAL_TASKS.custom()),
+#         (1, ffmpeg_toolkit.PARTIAL_TASKS.custom()),
+#         (1, ffmpeg_toolkit.PARTIAL_TASKS.custom()),
+#         (1, ffmpeg_toolkit.PARTIAL_TASKS.custom()),
+#         (1, ffmpeg_toolkit.PARTIAL_TASKS.custom()),
+#         (1, ffmpeg_toolkit.PARTIAL_TASKS.custom()),
+#         (1, ffmpeg_toolkit.PARTIAL_TASKS.custom()),
+#         (1, ffmpeg_toolkit.PARTIAL_TASKS.custom()),
+#         (1, ffmpeg_toolkit.PARTIAL_TASKS.custom()),
+#         (1, ffmpeg_toolkit.PARTIAL_TASKS.custom()),
 #     ]
 # )
 # ffmpeg_toolkit.partion_video(

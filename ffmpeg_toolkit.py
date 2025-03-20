@@ -1023,14 +1023,16 @@ def advanced_keep_or_remove_by_split_segs(
 
     try:
         # Split videos
-        temp_dir: Path = Path(tempfile.mkdtemp())
+        temp_dir1: Path = Path(tempfile.mkdtemp())
+        temp_dir2: Path = Path(tempfile.mkdtemp())
         FFRenderTasks().split_segments(
             input_file=input_file,
             video_segments=video_segments,
-            output_dir=temp_dir,
+            output_dir=temp_dir1,
         ).render()
-        splitted_videos: list[Path] = sorted(
-            temp_dir.glob(f"*{input_file.suffix}"),
+
+        video_files: list[Path] = sorted(
+            temp_dir1.glob(f"*{input_file.suffix}"),
             key=lambda video_file: int(video_file.stem.split("_")[0]),
         )
 
@@ -1041,14 +1043,16 @@ def advanced_keep_or_remove_by_split_segs(
 
         # Use ThreadPoolExecutor to manage rendreing tasks
         # Create the executor once for all tasks
+        new_video_files: list[Path] = []
+        futures = []
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=DEFAULTS.num_cores.value
         ) as executor:
-            futures = []
-            for video in splitted_videos:
+            for video in video_files:
+                new_output_file: Path = temp_dir2 / video.name
                 index = int(video.stem.split("_")[0])
                 i_remainder = index % 2
-                further_method = further_methods[i_remainder]  # type: ignore
+                further_method = further_methods[i_remainder]
 
                 # Remove unwanted segments
                 if further_method == "remove":
@@ -1057,31 +1061,36 @@ def advanced_keep_or_remove_by_split_segs(
 
                 # Skip further rendering if the segment is to be copied
                 if further_method is None:
+                    shutil.move(str(video), str(new_output_file))
+                    new_video_files.append(new_output_file)
                     continue
 
                 # Submit the further render task to the executor properly
-                future = executor.submit(further_method, input_file=video)
-                futures.append(future)
+                future = executor.submit(
+                    further_method, input_file=video, output_file=new_output_file
+                )
+                futures.append((future, video, new_output_file))
 
-        # Optionally, wait for all futures to complete
-        concurrent.futures.wait(futures)
+            # Wait for all submitted tasks to complete and then move files
+            for future, video, new_output_file in futures:
+                future.result()  # This will raise exceptions if any occurred during task execution
+                new_video_files.append(new_output_file)
 
         # Merge the kept segments
-        video_files: list[Path] = sorted(
-            list(
-                video
-                for video in temp_dir.glob("*")
-                if video.suffix.lstrip(".") in VideoSuffix
-            ),
-            key=lambda video: int(str(video.stem).split("_")[0]),
+        sorted_new_video_files: list[Path] = sorted(
+            new_video_files,
+            key=lambda video_file: int(video_file.stem.split("_")[0]),
         )
-        FFRenderTasks().merge(video_files, output_file).render()
+        FFRenderTasks().merge(sorted_new_video_files, output_file).render()
 
         # Clean up temporary files and dir
         if remove_temp_handle:
-            for video in temp_dir.iterdir():
+            for video in temp_dir1.iterdir():
                 os.remove(video)
-            os.rmdir(temp_dir)
+            for video in temp_dir2.iterdir():
+                os.remove(video)
+            os.rmdir(temp_dir1)
+            os.rmdir(temp_dir2)
         return 0
 
     except Exception as e:
@@ -1294,12 +1303,8 @@ def partion_video(
         ).render()
 
         video_files: list[Path] = sorted(
-            list(
-                video
-                for video in temp_dir.glob("*")
-                if video.suffix.lstrip(".") in VideoSuffix
-            ),
-            key=lambda video: int(str(video.stem).split("_")[0]),
+            temp_dir.glob(f"*{input_file.suffix}"),
+            key=lambda video_file: int(video_file.stem.split("_")[0]),
         )
 
         # Further render videos
@@ -1319,20 +1324,22 @@ def partion_video(
                     os.remove(video)
                     continue
 
-                if further_method is not None:
-                    # Submit the task and store the future
-                    future = executor.submit(further_method, input_file=video)
-                    futures.append((future, video, seg_output_file))
-                else:
-                    # If no further rendering is required, just move the video
+                if further_method is None:
                     shutil.move(str(video), str(seg_output_file))
                     new_video_files.append(seg_output_file)
+                    continue
 
-            # Wait for all submitted tasks to complete and then move files
-            for future, video, seg_output_file in futures:
-                future.result()  # This will raise exceptions if any occurred during task execution
-                shutil.move(str(video), str(seg_output_file))
-                new_video_files.append(seg_output_file)
+                # Submit the task and store the future
+                future = executor.submit(
+                    further_method, input_file=video, output_file=video
+                )
+                futures.append((future, video, seg_output_file))
+
+        # Wait for all submitted tasks to complete and then move files
+        for future, video, seg_output_file in futures:
+            future.result()  # This will raise exceptions if any occurred during task execution
+            shutil.move(str(video), str(seg_output_file))
+            new_video_files.append(seg_output_file)
 
         # Optionally, sort the new video files
         new_video_files = sorted(
@@ -1869,14 +1876,14 @@ def partial_render_task(
 ) -> FurtherRenderTask:
     if isinstance(task, MethodType) and task.__self__.__class__ == FFRenderTasks:
 
-        def _partial(input_file: str | Path) -> Any:
+        def _partial(input_file: str | Path, output_file: str | Path) -> Any:
             return task(
-                input_file=input_file, output_file=input_file, **config
+                input_file=input_file, output_file=output_file, **config
             ).render()
     else:
 
-        def _partial(input_file: str | Path) -> Any:
-            return task(input_file=input_file, output_file=input_file, **config)
+        def _partial(input_file: str | Path, output_file: str | Path) -> Any:
+            return task(input_file=input_file, output_file=output_file, **config)
 
     return _partial
 
@@ -1898,13 +1905,17 @@ class FunctionEnum(Enum):
 
 
 class PARTIAL_TASKS(FunctionEnum):
-    speedup = partial(partial_render_task, task=FFRenderTasks().speedup)
-    jumpcut = partial(partial_render_task, task=FFRenderTasks().jumpcut)
-    cut = partial(partial_render_task, task=FFRenderTasks().cut)
-    cut_silence = partial(partial_render_task, task=cut_silence)
-    cut_motionless = partial(partial_render_task, task=cut_motionless)
-    cut_silence_rerender = partial(
-        partial_render_task, task=FFRenderTasks().cut_silence_rerender
+    speedup = lambda **config: partial_render_task(
+        task=FFRenderTasks().speedup, **config
     )
-    custom = partial(partial_render_task, task=FFRenderTasks().custom)
-    partion_video = partial(partial_render_task, task=partion_video)
+    jumpcut = lambda **config: partial_render_task(
+        task=FFRenderTasks().jumpcut, **config
+    )
+    custom = lambda **config: partial_render_task(task=FFRenderTasks().custom, **config)
+    cut = lambda **config: partial_render_task(task=FFRenderTasks().cut, **config)
+    cut_silence_rerender = lambda **config: partial_render_task(
+        task=FFRenderTasks().cut_silence_rerender, **config
+    )
+    cut_silence = lambda **config: partial_render_task(task=cut_silence, **config)
+    cut_motionless = lambda **config: partial_render_task(task=cut_motionless, **config)
+    partion_video = lambda **config: partial_render_task(task=partion_video, **config)
