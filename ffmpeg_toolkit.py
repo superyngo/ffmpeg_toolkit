@@ -25,6 +25,20 @@ from typing import (
     TypedDict,
 )
 
+try:
+    from app.common import logger  # type: ignore
+except ImportError:
+    # Fallback to a default value
+    class logger:
+        @classmethod
+        def info(cls, message: str) -> None:
+            print(message)
+
+        @classmethod
+        def error(cls, message: str) -> None:
+            print(message)
+
+
 # Third-party imports
 from pydantic import BaseModel, Field, field_validator
 
@@ -50,22 +64,6 @@ class ERROR_CODE(Enum):
     DURATION_LESS_THAN_ZERO = auto()
     NO_VALID_SEGMENTS = auto()
     FAILED_TO_CUT = auto()
-
-
-class FrozenBaseModel(BaseModel):
-    class Config:
-        frozen = True
-
-
-# from app.common import logger
-class logger:
-    @classmethod
-    def info(cls, message: str) -> None:
-        print(message)
-
-    @classmethod
-    def error(cls, message: str) -> None:
-        print(message)
 
 
 def timing(func: Callable):
@@ -98,9 +96,6 @@ class _TASKS(StrEnum):
     CUT = auto()
     KEEP_OR_REMOVE = auto()
     MERGE = auto()
-    PROBE_ENCODING = auto()
-    PROBE_DURATION = auto()
-    PROBE_IS_VALID_VIDEO = auto()
     GET_NON_SILENCE_SEGS = auto()
     GET_MOTION_SEGS = auto()
     CUT_SILENCE = auto()
@@ -855,96 +850,7 @@ class FFRenderTasks(FFCreateRender):
         return self
 
 
-def ff_render(
-    input_file: Path | str,
-    output_file: Optional[Path | str],
-    task_descripton: _TASKS | str,
-    input_kwargs: FFKwargs,
-    output_kwargs: FFKwargs,
-    exception: Optional[FFRenderException],
-    post_task: Optional[Callable[..., Any]],
-) -> Any:
-    """Executeing ffmpeg with given args for different tasks
-
-    Args:
-        input_file (Path): _description_
-        output_file (Path | None, optional): _description_. Defaults to None.
-        task_name (str, optional): _description_. Defaults to "rendered".
-        othertags (dict | None, optional): _description_. Defaults to None.
-
-    Raises:
-        e: _description_
-
-    Returns:
-        int: _description_
-    """
-
-    input_file = Path(input_file)
-
-    # Handle output file path
-    if output_file is None:
-        output_file = (
-            input_file.parent
-            / f"{input_file.stem}_{task_descripton}{
-                input_file.suffix
-                if input_file.suffix in VideoSuffix
-                else '.' + VideoSuffix.MKV
-            }"
-        )
-    else:
-        output_file = Path(output_file)
-
-    # Handle temp output file path
-    if output_file == Path() or r"%d" in str(output_file):
-        temp_output_file: Path = output_file
-    else:
-        temp_output_file: Path = output_file.parent / (
-            output_file.stem + "_processing" + output_file.suffix
-        )
-
-    # Exception hadling
-    if exception is not None:
-        match exception["code"]:
-            case 0:
-                shutil.copyfile(input_file, output_file)
-            case 9:
-                exception.get("hook", lambda: None)()
-            case _:
-                pass
-        logger.error(exception["message"])
-        return exception["code"]
-
-    ff_kwargs_in: FFCreateCommand = FFCreateCommand(
-        input_file=input_file,
-        output_file=temp_output_file,
-        input_kwargs=input_kwargs,
-        output_kwargs=output_kwargs,
-    )
-
-    ff_kwargs_out: FFKwargs = _create_ff_kwargs(**ff_kwargs_in.model_dump())
-
-    logger.info(
-        f"{task_descripton.capitalize()} {input_file.name} to {output_file.name} with {ff_kwargs_out}"
-    )
-
-    try:
-        result: str = _ffmpeg(**ff_kwargs_out)
-        if temp_output_file != output_file and r"%" not in str(temp_output_file.stem):
-            temp_output_file.replace(output_file)
-
-        # Handle post task
-        if post_task is not None:
-            return post_task(result)
-
-        return result
-    except Exception as e:
-        logger.error(
-            f"Failed to do {task_descripton} videos for {input_file}. Error: {e}"
-        )
-        raise e
-
-
-# ff_render: sppedup
+# for fppedup
 def _create_force_keyframes_kwargs(
     keyframe_interval: int = DEFAULTS.keyframe_interval.value,
 ) -> dict[str, str]:
@@ -982,7 +888,7 @@ def _create_speedup_kwargs(multiple: float) -> dict[str, str]:
     )
 
 
-# ff_render: jumpcut
+# for jumpcut
 def _create_jumpcut_kwargs(
     b1_duration: float,
     b2_duration: float,
@@ -1284,6 +1190,7 @@ def _get_segments_from_parts_count(
     return split_points
 
 
+# Partitioning
 type PortionMethodSpecific = list[tuple[int, FurtherMethod]] | list[tuple[int, None]]
 type PortionMethod = PortionMethodSpecific | list[tuple[int, FurtherMethod] | int]
 
@@ -1416,7 +1323,7 @@ def partion_video(
         return 1
 
 
-# ff_render: cut silence copy / render
+# cut silence copy / render
 # Extract non silence segments info
 def _extract_non_silence_info(
     non_silence_segs_str: str,
@@ -1503,39 +1410,12 @@ def _extract_motion_segments(
     return break_points
 
 
-def _adjust_segments_to_keyframes(
-    video_segments: list[float], keyframes_segments: list[float]
-) -> list[float]:
-    adjusted_segments = []
-    keyframe_index = 0
-
-    for i, _time in enumerate(video_segments):
-        if i % 2 == 0:  # start time
-            # 找到不大於當前時間的最大關鍵幀時間
-            while (
-                keyframe_index < len(keyframes_segments)
-                and keyframes_segments[keyframe_index] <= _time
-            ):
-                keyframe_index += 1
-            adjusted_time = (
-                keyframes_segments[keyframe_index - 1] if keyframe_index > 0 else time
-            )
-            adjusted_segments.append(adjusted_time)
-        else:  # end time
-            # 找到不小於當前時間的最小關鍵幀時間
-            while (
-                keyframe_index < len(keyframes_segments)
-                and keyframes_segments[keyframe_index] < _time
-            ):
-                keyframe_index += 1
-            adjusted_time = (
-                keyframes_segments[keyframe_index]
-                if keyframe_index < len(keyframes_segments)
-                else _time
-            )
-            adjusted_segments.append(adjusted_time)
-
-    return adjusted_segments
+# Adjust segments
+class AdjustSegmentsConfig(BaseModel):
+    segments: list[float]
+    seg_min_duration: float = DEFAULTS.seg_min_duration.value
+    total_duration: float
+    keyframes: list[float]
 
 
 def _ensure_minimum_segment_length(
@@ -1599,6 +1479,41 @@ def _ensure_minimum_segment_length(
     return updated_segments
 
 
+def _adjust_segments_to_keyframes(
+    video_segments: list[float], keyframes_segments: list[float]
+) -> list[float]:
+    adjusted_segments = []
+    keyframe_index = 0
+
+    for i, _time in enumerate(video_segments):
+        if i % 2 == 0:  # start time
+            # 找到不大於當前時間的最大關鍵幀時間
+            while (
+                keyframe_index < len(keyframes_segments)
+                and keyframes_segments[keyframe_index] <= _time
+            ):
+                keyframe_index += 1
+            adjusted_time = (
+                keyframes_segments[keyframe_index - 1] if keyframe_index > 0 else time
+            )
+            adjusted_segments.append(adjusted_time)
+        else:  # end time
+            # 找到不小於當前時間的最小關鍵幀時間
+            while (
+                keyframe_index < len(keyframes_segments)
+                and keyframes_segments[keyframe_index] < _time
+            ):
+                keyframe_index += 1
+            adjusted_time = (
+                keyframes_segments[keyframe_index]
+                if keyframe_index < len(keyframes_segments)
+                else _time
+            )
+            adjusted_segments.append(adjusted_time)
+
+    return adjusted_segments
+
+
 def _merge_overlapping_segments(segments: list[float]) -> list[float]:
     """_summary_
 
@@ -1631,13 +1546,6 @@ def _merge_overlapping_segments(segments: list[float]) -> list[float]:
     merged_segments.extend([current_start, current_end])
 
     return merged_segments
-
-
-class AdjustSegmentsConfig(BaseModel):
-    segments: list[float]
-    seg_min_duration: float = DEFAULTS.seg_min_duration.value
-    total_duration: float
-    keyframes: list[float]
 
 
 def _adjust_segments_pipe(
@@ -1823,7 +1731,7 @@ def cut_motionless(
         # return ERROR_CODE.FAILED_TO_CUT
 
 
-# cut silence rerender
+# cut rerender
 class CSFiltersInfo(Enum):
     VIDEO = {
         "filename": f"temp_{time.strftime('%Y%m%d-%H%M%S')}_video_filter_",
@@ -1924,7 +1832,7 @@ def _create_cut_motionless_kwargs(
     }
 
 
-def partial_render_task(
+def _partial_render_task(
     task: MethodType | FunctionType | Callable, **config
 ) -> FurtherRenderTask:
     if "FFRenderTasks" in task.__qualname__:
@@ -1959,17 +1867,124 @@ class FunctionEnum(Enum):
 
 
 class PARTIAL_TASKS(FunctionEnum):
-    speedup = lambda **config: partial_render_task(
-        task=FFRenderTasks().speedup, **config
-    )
-    jumpcut = lambda **config: partial_render_task(
-        task=FFRenderTasks().jumpcut, **config
-    )
-    custom = lambda **config: partial_render_task(task=FFRenderTasks().custom, **config)
-    cut = lambda **config: partial_render_task(task=FFRenderTasks().cut, **config)
-    cut_silence_rerender = lambda **config: partial_render_task(
-        task=FFRenderTasks().cut_silence_rerender, **config
-    )
-    cut_silence = lambda **config: partial_render_task(task=cut_silence, **config)
-    cut_motionless = lambda **config: partial_render_task(task=cut_motionless, **config)
-    partion_video = lambda **config: partial_render_task(task=partion_video, **config)
+    @staticmethod
+    def speedup(
+        multiple: float | int = 2,
+        input_kwargs: Optional[FFKwargs] = None,
+        output_kwargs: Optional[FFKwargs] = None,
+    ):
+        return _partial_render_task(
+            task=FFRenderTasks().speedup,
+            multiple=multiple,
+            input_kwargs=input_kwargs,
+            output_kwargs=output_kwargs,
+        )
+
+    @staticmethod
+    def jumpcut(
+        b1_duration: float = 5,
+        b2_duration: float = 5,
+        b1_multiple: float = 1,  # 0 means remove this part
+        b2_multiple: float = 0,  # 0 means remove this part
+        input_kwargs: Optional[FFKwargs] = None,
+        output_kwargs: Optional[FFKwargs] = None,
+    ):
+        return _partial_render_task(
+            task=FFRenderTasks().jumpcut,
+            b1_duration=b1_duration,
+            b2_duration=b2_duration,
+            b1_multiple=b1_multiple,
+            b2_multiple=b2_multiple,
+            input_kwargs=input_kwargs,
+            output_kwargs=output_kwargs,
+        )
+
+    @staticmethod
+    def custom(
+        input_kwargs: Optional[FFKwargs] = None,
+        output_kwargs: Optional[FFKwargs] = None,
+    ):
+        return _partial_render_task(
+            task=FFRenderTasks().custom,
+            input_kwargs=input_kwargs,
+            output_kwargs=output_kwargs,
+        )
+
+    @staticmethod
+    def cut(
+        ss: str = "00:00:00",
+        to: str = "00:00:01",
+        rerender: bool = False,
+        input_kwargs: Optional[FFKwargs] = None,
+        output_kwargs: Optional[FFKwargs] = None,
+    ):
+        return _partial_render_task(
+            task=FFRenderTasks().cut,
+            ss=ss,
+            to=to,
+            rerender=rerender,
+            input_kwargs=input_kwargs,
+            output_kwargs=output_kwargs,
+        )
+
+    @staticmethod
+    def cut_silence_rerender(
+        dB: int = DEFAULTS.db_threshold.value,
+        sampling_duration: float = DEFAULTS.sampling_duration.value,
+        input_kwargs: Optional[FFKwargs] = None,
+        output_kwargs: Optional[FFKwargs] = None,
+    ):
+        return _partial_render_task(
+            task=FFRenderTasks().cut_silence_rerender,
+            dB=dB,
+            sampling_duration=sampling_duration,
+            input_kwargs=input_kwargs,
+            output_kwargs=output_kwargs,
+        )
+
+    @staticmethod
+    def cut_silence(
+        dB: int = DEFAULTS.db_threshold.value,
+        sampling_duration: float = DEFAULTS.sampling_duration.value,
+        seg_min_duration: float = DEFAULTS.seg_min_duration.value,
+        even_further: FurtherMethod = "remove",  # For other segments, remove means remove, None means copy
+        odd_further: FurtherMethod = None,
+    ):  # For segments, remove means remove, None means copy
+        return _partial_render_task(
+            task=cut_silence,
+            dB=dB,
+            sampling_duration=sampling_duration,
+            seg_min_duration=seg_min_duration,
+            even_further=even_further,
+            odd_further=odd_further,
+        )
+
+    @staticmethod
+    def cut_motionless(
+        threshold: float = DEFAULTS.motionless_threshold.value,
+        sampling_duration: float = DEFAULTS.sampling_duration.value,
+        seg_min_duration: float = DEFAULTS.seg_min_duration.value,
+        even_further: FurtherMethod = "remove",  # For other segments, remove means remove, None means copy
+        odd_further: FurtherMethod = None,  # For segments, remove means remove, None means copy
+    ):
+        return _partial_render_task(
+            task=cut_motionless,
+            threshold=threshold,
+            sampling_duration=sampling_duration,
+            seg_min_duration=seg_min_duration,
+            even_further=even_further,
+            odd_further=odd_further,
+        )
+
+    @staticmethod
+    def partion_video(
+        partition_config: Optional[PartitionConfig] = None,
+        output_dir: Optional[Path | str] = None,
+        output_file: Path | str | None = None,
+    ):
+        return _partial_render_task(
+            task=partion_video,
+            partition_config=partition_config,
+            output_dir=output_dir,
+            output_file=output_file,
+        )
