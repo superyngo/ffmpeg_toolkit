@@ -1,5 +1,6 @@
 import os
 import ffmpeg_toolkit
+from ffmpeg_toolkit import FPRenderTasks
 from pathlib import Path
 from functools import partial
 from typing import Iterable, Sequence, Optional, Callable, Literal, Mapping, TypedDict
@@ -14,17 +15,17 @@ bin_path = current_file_path.parent / "bin"
 os.environ["PATH"] = a = str(bin_path) + os.pathsep + os.environ["PATH"]
 
 
-input_file = Path(r"F:\Users\user\Downloads\IMG_2078.mp4")
+input_file = Path(r"C:\Users\user\Downloads\IMG_2180.mp4")
 # input_file = Path(r"C:\Users\user\Downloads\IMG_2078.mp4")
 dir = Path(r"C:\Users\user\AppData\Local\Temp\tmpsn52hpxj")
 
-# jumpcut_args = {
-#     "input_file": input_file,
-#     "b1_duration": 0.5,
-#     "b2_duration": 1.5,
-#     "b1_multiple": 3,
-#     "b2_multiple": 10.5,
-# }
+jumpcut_args = {
+    # "input_file": input_file,
+    "b1_duration": 0.5,
+    "b2_duration": 1.5,
+    "b1_multiple": 3,
+    "b2_multiple": 10.5,
+}
 # ffmpeg_toolkit.FFRenderTasks().jumpcut(**jumpcut_args).render()
 # ffmpeg_toolkit.FFRenderTasks().speedup(input_file=input_file, multiple=5).render()
 
@@ -38,34 +39,29 @@ dir = Path(r"C:\Users\user\AppData\Local\Temp\tmpsn52hpxj")
 #     "threshold": 0.005,
 #     "odd_further": ffmpeg_toolkit.PARTIAL_TASKS.custom(),
 # # }
-# # # ffmpeg_toolkit.cut_motionless(**cut_motionless_config)
-ffmpeg_toolkit.cut_silence(
-    input_file,
-    odd_further=ffmpeg_toolkit.PARTIAL_TASKS.custom(),
-    # even_further=ffmpeg_toolkit.PARTIAL_TASKS.custom(),
+# # # # ffmpeg_toolkit.cut_motionless(**cut_motionless_config)
+
+
+partition_config = ffmpeg_toolkit.PartitionConfig(
+    portion_method=[
+        (1, ffmpeg_toolkit.PARTIAL_TASKS.custom()),
+        (1, ffmpeg_toolkit.PARTIAL_TASKS.jumpcut(**jumpcut_args)),
+        (1, ffmpeg_toolkit.PARTIAL_TASKS.speedup(multiple=5)),
+        (1, ffmpeg_toolkit.PARTIAL_TASKS.speedup(multiple=6)),
+        (1, ffmpeg_toolkit.PARTIAL_TASKS.speedup(multiple=3)),
+        (1, ffmpeg_toolkit.PARTIAL_TASKS.speedup(multiple=2)),
+    ]
 )
+# ffmpeg_toolkit.cut_silence(
+#     input_file,
+#     odd_further=ffmpeg_toolkit.PARTIAL_TASKS.speedup(),
+#     even_further=ffmpeg_toolkit.PARTIAL_TASKS.jumpcut(**jumpcut_args),
+# )
 
 
-# partition_config = ffmpeg_toolkit.PartitionConfig(
-#     portion_method=[
-#         (1, ffmpeg_toolkit.PARTIAL_TASKS.custom()),
-#         (1, ffmpeg_toolkit.PARTIAL_TASKS.custom()),
-#         (1, ffmpeg_toolkit.PARTIAL_TASKS.custom()),
-#         (1, ffmpeg_toolkit.PARTIAL_TASKS.custom()),
-#         (1, ffmpeg_toolkit.PARTIAL_TASKS.custom()),
-#         (1, ffmpeg_toolkit.PARTIAL_TASKS.custom()),
-#         (1, ffmpeg_toolkit.PARTIAL_TASKS.custom()),
-#         (1, ffmpeg_toolkit.PARTIAL_TASKS.custom()),
-#         (1, ffmpeg_toolkit.PARTIAL_TASKS.custom()),
-#         (1, ffmpeg_toolkit.PARTIAL_TASKS.custom()),
-#         (1, ffmpeg_toolkit.PARTIAL_TASKS.custom()),
-#         (1, ffmpeg_toolkit.PARTIAL_TASKS.custom()),
-#         (1, ffmpeg_toolkit.PARTIAL_TASKS.custom()),
-#     ]
-# )
-# ffmpeg_toolkit.partion_video(
-#     input_file, partition_config, output_file=input_file.parent / "rendered1.mkv"
-# )
+ffmpeg_toolkit.partion_video(
+    input_file, partition_config, output_file=input_file.parent / "rendered1.mkv"
+)
 
 
 # code.interact(local=globals())

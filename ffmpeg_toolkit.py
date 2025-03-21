@@ -1,30 +1,36 @@
-# import ffmpeg
-from typing import (
-    Any,
-    Iterable,
-    NotRequired,
-    Optional,
-    Callable,
-    Literal,
-    Mapping,
-    TypedDict,
-)
-from types import MethodType, FunctionType
-from pathlib import Path
-from enum import Enum, StrEnum, auto
-from collections.abc import Generator
+# Standard library imports
+import concurrent.futures
+import copy
+import json
+import os
 import re
+import shutil
 import subprocess
 import tempfile
 import time
-import os
-import concurrent.futures
-import json
-from ffmpeg_types import EncodeKwargs, VideoSuffix
+from collections.abc import Generator
+from enum import Enum, StrEnum, auto
 from functools import wraps, partial
+from itertools import accumulate
+from pathlib import Path
+from types import MethodType, FunctionType
+from typing import (
+    Any,
+    Callable,
+    Iterable,
+    Literal,
+    Mapping,
+    NotRequired,
+    Optional,
+    TypedDict,
+)
+
+# Third-party imports
 from pydantic import BaseModel, Field, field_validator
-import shutil
-from itertools import batched, accumulate
+
+# Local imports
+from ffmpeg_types import EncodeKwargs, VideoSuffix
+# import ffmpeg
 
 
 class DEFAULTS(Enum):
@@ -37,6 +43,7 @@ class DEFAULTS(Enum):
     motionless_threshold = 0.0095
     sampling_duration = 0.2
     seg_min_duration = 0
+    temp_dir_prefix = "ffmpeg_toolkit"
 
 
 class ERROR_CODE(Enum):
@@ -108,11 +115,17 @@ class _PROBE_TASKS(StrEnum):
     DURATION = auto()
     ENCODING = auto()
     IS_VALID_VIDEO = auto()
+    KEYFRAMES = auto()
+    NON_SILENCE_SEGS = auto()
+    FRAMES_PER_SECOND = auto()
 
 
 # basic
 type FFKwargsValue = str | Path | float | int
 type FFKwargs = dict[str, FFKwargsValue]
+type FurtherKwarks = None | FFKwargs
+type FurtherRenderTask = Callable[..., Any] | PARTIAL_TASKS
+type FurtherMethod = FurtherRenderTask | Literal["remove"] | None
 
 
 def _create_ff_kwargs(
@@ -209,6 +222,7 @@ def _ffmpeg(**ffkwargs) -> str:
         raise e
 
 
+@timing
 def _ffprobe(**ffkwargs):
     command = ["ffprobe"] + _dic_to_ffmpeg_kwargs(ffkwargs)
     logger.info(f"Executing ffprobe command: {' '.join(command)}")
@@ -220,116 +234,6 @@ def _ffprobe(**ffkwargs):
     except subprocess.CalledProcessError as e:
         logger.error(f"Failed to execute ffprobe. Error: {e}")
         raise e
-
-
-# probe
-def probe_duration(input_file: Path, **othertags) -> float:  #
-    output_kwargs: dict = {
-        "v": "error",
-        "show_entries": "format=duration",
-        "of": "default=noprint_wrappers=1:nokey=1",
-        "i": input_file,
-    } | othertags
-    logger.info(f"Probing {input_file.name} duration with {output_kwargs = }")
-    command = ["ffprobe"] + _dic_to_ffmpeg_kwargs(output_kwargs)
-    result = subprocess.run(
-        command, capture_output=True, text=True, check=True, encoding="utf-8"
-    )
-    probe_duration = result.stdout.strip()
-    logger.info(f"{input_file.name} duration probed: {probe_duration}")
-
-    return float(probe_duration or 0)
-
-
-def probe_encoding(input_file: Path, **othertags) -> EncodeKwargs:  #
-    output_kwargs: dict = {
-        "v": "error",
-        "print_format": "json",
-        "show_format": "",
-        "show_streams": "",
-        "i": input_file,
-    } | othertags
-    logger.info(f"Probing {input_file.name} encoding with {output_kwargs = }")
-    # Probe the video file to get metadata
-    command = ["ffprobe"] + _dic_to_ffmpeg_kwargs(output_kwargs)
-    result = subprocess.run(
-        command, capture_output=True, text=True, check=True, encoding="utf-8"
-    )
-    probe = json.loads(result.stdout)
-
-    # Initialize the dictionary with default values
-    encoding_info: EncodeKwargs = {}
-
-    # Extract video stream information
-    video_stream = next(
-        (stream for stream in probe["streams"] if stream["codec_type"] == "video"), None
-    )
-    if video_stream:
-        encoding_info["video_track_timescale"] = int(
-            video_stream.get("time_base").split("/")[1]
-        )
-        encoding_info["vcodec"] = video_stream.get("codec_name")
-        encoding_info["video_bitrate"] = int(video_stream.get("bit_rate", 0))
-
-    # Extract audio stream information
-    audio_stream = next(
-        (stream for stream in probe["streams"] if stream["codec_type"] == "audio"), None
-    )
-    if audio_stream:
-        encoding_info["acodec"] = audio_stream.get("codec_name")
-        encoding_info["ar"] = int(audio_stream.get("sample_rate", 0))
-
-    # Extract format information
-    format_info = probe.get("format", {})
-    encoding_info["f"] = format_info.get("format_name").split(",")[0]
-    cleaned_None = {k: v for k, v in encoding_info.items() if v is not None and v != 0}
-    logger.info(f"{input_file.name} probed: {cleaned_None}")
-
-    return cleaned_None  # type: ignore
-
-
-def _probe_keyframe(input_file: Path, **othertags) -> list[float]:  #
-    output_kwargs: dict = {
-        "v": "error",
-        "select_streams": "v:0",
-        "show_entries": "packet=pts_time,flags",
-        "of": "json",
-        "i": input_file,
-    } | othertags
-    logger.info(f"Getting keyframes for {input_file.name} with {output_kwargs = }")
-    command = ["ffprobe"] + _dic_to_ffmpeg_kwargs(output_kwargs)
-    # logger.info(f"command: {' '.join(command)}")
-    result = subprocess.run(
-        command, capture_output=True, text=True, check=True, encoding="utf-8"
-    )
-    probe = json.loads(result.stdout)
-    keyframe_pts: list[float] = [
-        float(packet["pts_time"])
-        for packet in probe["packets"]
-        if "K" in packet["flags"]
-    ]
-    return keyframe_pts
-
-
-def _probe_frame_per_s(input_file: Path, **othertags) -> str:
-    # ffprobe -v error -select_streams v -show_entries stream=r_frame_rate -of csv=p=0 -i "C:\Users\user\Downloads\2025-02-17_1739743880_merged.mp4"
-    output_kwargs: dict = {
-        "v": "error",
-        "select_streams": "v",
-        "show_entries": "stream=r_frame_rate",
-        "of": "csv=p=0",
-        "i": input_file,
-    } | othertags
-    logger.info(
-        f"Getting frame per second for {input_file.name} with {output_kwargs = }"
-    )
-    command = ["ffprobe"] + _dic_to_ffmpeg_kwargs(output_kwargs)
-    # logger.info(f"command: {' '.join(command)}")
-    result = subprocess.run(
-        command, capture_output=True, text=True, check=True, encoding="utf-8"
-    ).stdout.strip()
-
-    return result
 
 
 class FFRenderException(TypedDict):
@@ -350,63 +254,134 @@ class FPCreateRender(FPCreateCommand):
     post_task: Optional[Callable[..., Any]] = None
 
     def render(self) -> Any:
-        input_file = Path(self.input_file)
+        _shadow = copy.copy(self)
+        _shadow.input_file = Path(_shadow.input_file)
 
         # Exception hadling
-        if self.exception is not None:
-            match self.exception["code"]:
+        if _shadow.exception is not None:
+            match _shadow.exception["code"]:
                 case 9:
-                    self.exception.get("hook", lambda: None)()
+                    _shadow.exception.get("hook", lambda: None)()
                 case _:
                     pass
-            logger.error(self.exception["message"])
-            return self.exception["code"]
+            logger.error(_shadow.exception["message"])
+            return _shadow.exception["code"]
 
         # Generate ff kwargs in
         unwated_key: list[str] = ["task_descripton", "exception", "post_task"]
         fp_command = {
-            k: v for k, v in self.model_dump().items() if k not in unwated_key
+            k: v for k, v in _shadow.model_dump().items() if k not in unwated_key
         }
         ff_kwargs: FFKwargs = _create_fp_kwargs(**fp_command)
 
         logger.info(
-            f"{self.task_descripton.capitalize()} {input_file.name}  with {ff_kwargs}"
+            f"{_shadow.task_descripton.capitalize()} {_shadow.input_file.name}  with {ff_kwargs}"
         )
 
         try:
             result: str = _ffprobe(**ff_kwargs)
 
             # Return post task if exists
-            if self.post_task is not None:
-                return self.post_task(result)
+            if _shadow.post_task is not None:
+                return _shadow.post_task(result)
 
             return result
         except Exception as e:
             logger.error(
-                f"Failed to do {self.task_descripton} videos for {input_file}. Error: {e}"
+                f"Failed to do {_shadow.task_descripton} videos for {_shadow.input_file}. Error: {e}"
             )
             raise e
 
 
 class FPRenderTasks(FPCreateRender):
+    def encode(
+        self,
+        input_file: str | Path,
+        input_kwargs: Optional[FFKwargs] = None,
+        output_kwargs: Optional[FFKwargs] = None,
+    ) -> FPCreateRender:
+        defalut_output_kwargs: FFKwargs = {
+            "v": "error",
+            "print_format": "json",
+            "show_format": "",
+            "show_streams": "",
+            "i": input_file,
+        }
+        self.task_descripton = _PROBE_TASKS.ENCODING
+        self.input_file = input_file
+        if input_kwargs is not None:
+            self.input_kwargs = input_kwargs
+        self.output_kwargs = defalut_output_kwargs | (
+            {} if output_kwargs is None else output_kwargs
+        )
+
+        def post_task(result) -> EncodeKwargs:
+            # Initialize the dictionary with default values
+            encoding_info: EncodeKwargs = {}
+            probe = json.loads(result)
+
+            # Extract video stream information
+            video_stream = next(
+                (
+                    stream
+                    for stream in probe["streams"]
+                    if stream["codec_type"] == "video"
+                ),
+                None,
+            )
+            if video_stream:
+                encoding_info["video_track_timescale"] = int(
+                    video_stream.get("time_base").split("/")[1]
+                )
+                encoding_info["vcodec"] = video_stream.get("codec_name")
+                encoding_info["video_bitrate"] = int(video_stream.get("bit_rate", 0))
+
+            # Extract audio stream information
+            audio_stream = next(
+                (
+                    stream
+                    for stream in probe["streams"]
+                    if stream["codec_type"] == "audio"
+                ),
+                None,
+            )
+            if audio_stream:
+                encoding_info["acodec"] = audio_stream.get("codec_name")
+                encoding_info["ar"] = int(audio_stream.get("sample_rate", 0))
+
+            # Extract format information
+            format_info = probe.get("format", {})
+            encoding_info["f"] = format_info.get("format_name").split(",")[0]
+            cleaned_None = {
+                k: v for k, v in encoding_info.items() if v is not None and v != 0
+            }
+            logger.info(f"{Path(input_file).name} probed: {cleaned_None}")
+            return cleaned_None  # type: ignore
+
+        self.post_task = post_task
+        return self
+
     def is_valid_video(
         self,
         input_file: str | Path,
         input_kwargs: Optional[FFKwargs] = None,
         output_kwargs: Optional[FFKwargs] = None,
     ) -> FPCreateRender:
-        self.task_descripton = _PROBE_TASKS.IS_VALID_VIDEO
-        self.input_file = input_file
-        if input_kwargs is not None:
-            self.input_kwargs = input_kwargs
-        self.output_kwargs = {
+        defalut_output_kwargs: FFKwargs = {
             "v": "error",
             "show_entries": "format=duration",
             "of": "default=noprint_wrappers=1:nokey=1",
             "i": input_file,
-        } | ({} if output_kwargs is None else output_kwargs)
+        }
+        self.task_descripton = _PROBE_TASKS.IS_VALID_VIDEO
+        self.input_file = input_file
+        if input_kwargs is not None:
+            self.input_kwargs = input_kwargs
+        self.output_kwargs = defalut_output_kwargs | (
+            {} if output_kwargs is None else output_kwargs
+        )
 
-        def post_task(result):
+        def post_task(result) -> bool:
             if result:
                 message = f"Validated file: {input_file}, Status: Valid"
                 logger.info(message)
@@ -415,6 +390,95 @@ class FPRenderTasks(FPCreateRender):
                 message = f"Validated file: {input_file}, Status: Invalid"
                 logger.info(message)
                 return False
+
+        self.post_task = post_task
+        return self
+
+    def duration(
+        self,
+        input_file: str | Path,
+        input_kwargs: Optional[FFKwargs] = None,
+        output_kwargs: Optional[FFKwargs] = None,
+    ) -> FPCreateRender:
+        defalut_output_kwargs: FFKwargs = {
+            "v": "error",
+            "show_entries": "format=duration",
+            "of": "default=noprint_wrappers=1:nokey=1",
+            "i": input_file,
+        }
+        self.task_descripton = _PROBE_TASKS.DURATION
+        self.input_file = input_file
+        if input_kwargs is not None:
+            self.input_kwargs = input_kwargs
+        self.output_kwargs = defalut_output_kwargs | (
+            {} if output_kwargs is None else output_kwargs
+        )
+
+        def post_task(result):
+            logger.info(f"{Path(input_file).name} duration probed: {result}")
+            return float(result or 0)
+
+        self.post_task = post_task
+        return self
+
+    def keyframes(
+        self,
+        input_file: str | Path,
+        input_kwargs: Optional[FFKwargs] = None,
+        output_kwargs: Optional[FFKwargs] = None,
+    ) -> FPCreateRender:
+        defalut_output_kwargs: FFKwargs = {
+            "v": "error",
+            "select_streams": "v:0",
+            "show_entries": "packet=pts_time,flags",
+            "of": "json",
+            "i": input_file,
+        }
+        self.task_descripton = _PROBE_TASKS.KEYFRAMES
+        self.input_file = input_file
+        if input_kwargs is not None:
+            self.input_kwargs = input_kwargs
+        self.output_kwargs = defalut_output_kwargs | (
+            {} if output_kwargs is None else output_kwargs
+        )
+
+        def post_task(result) -> list[float]:
+            probe = json.loads(result)
+            keyframe_pts: list[float] = [
+                float(packet["pts_time"])
+                for packet in probe["packets"]
+                if "K" in packet["flags"]
+            ]
+            logger.info(f"{Path(input_file).name} keyframes probed: {keyframe_pts}")
+            return keyframe_pts
+
+        self.post_task = post_task
+        return self
+
+    def frame_per_s(
+        self,
+        input_file: str | Path,
+        input_kwargs: Optional[FFKwargs] = None,
+        output_kwargs: Optional[FFKwargs] = None,
+    ) -> FPCreateRender:
+        defalut_output_kwargs: FFKwargs = {
+            "v": "error",
+            "select_streams": "v",
+            "show_entries": "stream=r_frame_rate",
+            "of": "csv=p=0",
+            "i": input_file,
+        }
+        self.task_descripton = _PROBE_TASKS.FRAMES_PER_SECOND
+        self.input_file = input_file
+        if input_kwargs is not None:
+            self.input_kwargs = input_kwargs
+        self.output_kwargs = defalut_output_kwargs | (
+            {} if output_kwargs is None else output_kwargs
+        )
+
+        def post_task(result):
+            logger.info(f"{Path(input_file).name} frames per second probed: {result}")
+            return result
 
         self.post_task = post_task
         return self
@@ -433,38 +497,40 @@ class FFCreateRender(FFCreateCommand):
     post_task: Optional[Callable[..., Any]] = None
 
     def render(self) -> Any:
-        self.input_file = Path(self.input_file)
+        _shadow = copy.copy(self)
+        _shadow.input_file = Path(_shadow.input_file)
 
         # Handle output file path
-        if self.output_file is None:
-            self.output_file = (
-                self.input_file.parent
-                / f"{self.input_file.stem}_{self.task_descripton}{
-                    self.input_file.suffix
-                    if self.input_file.suffix in VideoSuffix
+        if _shadow.output_file is None:
+            _shadow.output_file = (
+                _shadow.input_file.parent
+                / f"{_shadow.input_file.stem}_{_shadow.task_descripton}{
+                    _shadow.input_file.suffix
+                    if _shadow.input_file.suffix in VideoSuffix
                     else '.' + VideoSuffix.MKV
                 }"
             )
         else:
-            self.output_file = Path(self.output_file)
+            _shadow.output_file = Path(_shadow.output_file)
 
         # Handle temp output file path
-        if self.output_file == Path() or r"%d" in str(self.output_file):
-            temp_output_file: Path = self.output_file
+        if _shadow.output_file == Path() or r"%d" in str(_shadow.output_file):
+            temp_output_file: Path = _shadow.output_file
         else:
-            temp_output_file: Path = self.output_file.parent / (
-                self.output_file.stem + "_processing" + self.output_file.suffix
+            temp_output_file: Path = _shadow.output_file.parent / (
+                _shadow.output_file.stem + "_processing" + _shadow.output_file.suffix
             )
 
         # Exception hadling
-        if self.exception is not None:
-            match self.exception["code"]:
-                case 9:
-                    self.exception.get("hook", lambda: None)()
+        if _shadow.exception is not None:
+            match _shadow.exception["code"]:
                 case _:
                     pass
-            logger.error(self.exception["message"])
-            return self.exception["code"]
+            logger.error(_shadow.exception["message"])
+            exception_hook = _shadow.exception.get("hook", lambda: None)
+            if exception_hook is not None:
+                return exception_hook()
+            return _shadow.exception["code"]
 
         # Generate ff kwargs in
         unwated_key: list[str] = [
@@ -474,29 +540,29 @@ class FFCreateRender(FFCreateCommand):
             "output_file",
         ]
         fp_command = {
-            k: v for k, v in self.model_dump().items() if k not in unwated_key
+            k: v for k, v in _shadow.model_dump().items() if k not in unwated_key
         } | {"output_file": temp_output_file}
         ff_kwargs: FFKwargs = _create_ff_kwargs(**fp_command)
 
         logger.info(
-            f"{self.task_descripton.capitalize()} {self.input_file.name} to {self.output_file.name} with {ff_kwargs}"
+            f"{_shadow.task_descripton.capitalize()} {_shadow.input_file.name} to {_shadow.output_file.name} with {ff_kwargs}"
         )
 
         try:
             result: str = _ffmpeg(**ff_kwargs)
-            if temp_output_file != self.output_file and r"%" not in str(
+            if temp_output_file != _shadow.output_file and r"%" not in str(
                 temp_output_file.stem
             ):
-                temp_output_file.replace(self.output_file)
+                temp_output_file.replace(_shadow.output_file)
 
             # Return post task if exists
-            if self.post_task is not None:
-                return self.post_task(result)
+            if _shadow.post_task is not None:
+                return _shadow.post_task(result)
 
             return result
         except Exception as e:
             logger.error(
-                f"Failed to do {self.task_descripton} videos for {self.input_file}. Error: {e}"
+                f"Failed to do {_shadow.task_descripton} videos for {_shadow.input_file}. Error: {e}"
             )
             raise e
 
@@ -639,7 +705,7 @@ class FFRenderTasks(FFCreateRender):
             os.remove(input_txt)
             if not any(input_txt.parent.iterdir()):
                 os.rmdir(input_txt.parent)
-                logger.info(f"{input_txt.parent} removed")
+                logger.info(f"removed {input_txt.parent}")
 
         self.post_task = post_task
 
@@ -774,7 +840,7 @@ class FFRenderTasks(FFCreateRender):
         self.output_file = Path()
         if input_kwargs is not None:
             self.input_kwargs = input_kwargs
-        frame_per_second: str = _probe_frame_per_s(input_file)
+        frame_per_second: str = FPRenderTasks().frame_per_s(input_file).render()
         self.output_kwargs = (
             {
                 "vf": f"select='not(mod(n,floor({frame_per_second})*{sampling_duration}))*gte(scene,0)',metadata=print",
@@ -958,7 +1024,7 @@ def create_merge_txt(
 ) -> Path:
     # Step 0: Set the output txt path
     if output_txt is None:
-        temp_output_dir = Path(tempfile.mkdtemp())
+        temp_output_dir = Path(tempfile.mkdtemp(prefix=DEFAULTS.temp_dir_prefix.value))
         output_txt = temp_output_dir / "input.txt"
 
     if isinstance(video_files_source, Path):
@@ -984,11 +1050,6 @@ def create_merge_txt(
             f.write(f"file '{video_path}'\n")
 
     return output_txt
-
-
-type FurtherKwarks = None | FFKwargs
-type FurtherRenderTask = Callable[..., Any] | partial | PARTIAL_TASKS
-type FurtherMethod = FurtherRenderTask | Literal["remove"] | None
 
 
 # keep or remove copy/rendering by split segs
@@ -1023,16 +1084,15 @@ def advanced_keep_or_remove_by_split_segs(
 
     try:
         # Split videos
-        temp_dir1: Path = Path(tempfile.mkdtemp())
-        temp_dir2: Path = Path(tempfile.mkdtemp())
+        temp_dir: Path = Path(tempfile.mkdtemp(prefix=DEFAULTS.temp_dir_prefix.value))
         FFRenderTasks().split_segments(
             input_file=input_file,
             video_segments=video_segments,
-            output_dir=temp_dir1,
+            output_dir=temp_dir,
         ).render()
 
         video_files: list[Path] = sorted(
-            temp_dir1.glob(f"*{input_file.suffix}"),
+            temp_dir.glob(f"*{input_file.suffix}"),
             key=lambda video_file: int(video_file.stem.split("_")[0]),
         )
 
@@ -1043,16 +1103,16 @@ def advanced_keep_or_remove_by_split_segs(
 
         # Use ThreadPoolExecutor to manage rendreing tasks
         # Create the executor once for all tasks
-        new_video_files: list[Path] = []
         futures = []
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=DEFAULTS.num_cores.value
         ) as executor:
             for video in video_files:
-                new_output_file: Path = temp_dir2 / video.name
                 index = int(video.stem.split("_")[0])
                 i_remainder = index % 2
-                further_method = further_methods[i_remainder]
+                further_method: FurtherMethod = copy.deepcopy(
+                    further_methods[i_remainder]
+                )
 
                 # Remove unwanted segments
                 if further_method == "remove":
@@ -1061,36 +1121,30 @@ def advanced_keep_or_remove_by_split_segs(
 
                 # Skip further rendering if the segment is to be copied
                 if further_method is None:
-                    shutil.move(str(video), str(new_output_file))
-                    new_video_files.append(new_output_file)
                     continue
 
                 # Submit the further render task to the executor properly
                 future = executor.submit(
-                    further_method, input_file=video, output_file=new_output_file
+                    further_method, input_file=video, output_file=video
                 )
-                futures.append((future, video, new_output_file))
+                futures.append(future)
 
             # Wait for all submitted tasks to complete and then move files
-            for future, video, new_output_file in futures:
+            for future in futures:
                 future.result()  # This will raise exceptions if any occurred during task execution
-                new_video_files.append(new_output_file)
 
         # Merge the kept segments
-        sorted_new_video_files: list[Path] = sorted(
-            new_video_files,
+        rendered_video_files: list[Path] = sorted(
+            temp_dir.glob(f"*{input_file.suffix}"),
             key=lambda video_file: int(video_file.stem.split("_")[0]),
         )
-        FFRenderTasks().merge(sorted_new_video_files, output_file).render()
+        FFRenderTasks().merge(rendered_video_files, output_file).render()
 
         # Clean up temporary files and dir
         if remove_temp_handle:
-            for video in temp_dir1.iterdir():
+            for video in temp_dir.iterdir():
                 os.remove(video)
-            for video in temp_dir2.iterdir():
-                os.remove(video)
-            os.rmdir(temp_dir1)
-            os.rmdir(temp_dir2)
+            os.rmdir(temp_dir)
         return 0
 
     except Exception as e:
@@ -1099,107 +1153,108 @@ def advanced_keep_or_remove_by_split_segs(
 
 
 # keep or remove copy/rendering by cuts
-def advanced_keep_or_remove_by_cuts(
-    input_file: Path | str,
-    output_file: Path | str | None,
-    video_segments: list[str] | list[float],
-    even_further: FurtherMethod = "remove",  # For other segments, remove means remove, None means copy
-    odd_further: FurtherMethod = None,  # For segments, remove means remove, None means copy
-) -> int:
-    task_descripton = _TASKS.KEEP_OR_REMOVE
-    input_file = Path(input_file)
+# def advanced_keep_or_remove_by_cuts(
+#     input_file: Path | str,
+#     output_file: Path | str | None,
+#     video_segments: list[str] | list[float],
+#     even_further: FurtherMethod = "remove",  # For other segments, remove means remove, None means copy
+#     odd_further: FurtherMethod = None,  # For segments, remove means remove, None means copy
+# ) -> int:
+#     task_descripton = _TASKS.KEEP_OR_REMOVE
+#     input_file = Path(input_file)
 
-    # Set the output file path
-    if output_file is None:
-        output_file = input_file.parent / (
-            input_file.stem + "_" + task_descripton + input_file.suffix
-        )
-    else:
-        output_file = Path(output_file)
+#     # Set the output file path
+#     if output_file is None:
+#         output_file = input_file.parent / (
+#             input_file.stem + "_" + task_descripton + input_file.suffix
+#         )
+#     else:
+#         output_file = Path(output_file)
 
-    logger.info(
-        f"{task_descripton.capitalize()} {input_file.name} to {output_file.name} with {even_further = } ,{odd_further = }."
-    )
+#     logger.info(
+#         f"{task_descripton.capitalize()} {input_file.name} to {output_file.name} with {even_further = } ,{odd_further = }."
+#     )
 
-    # Double every time point and convert to timestamp if needed
-    video_segments = list(
-        _convert_seconds_to_timestamp(s) if isinstance(s, (float, int)) else s
-        for o in video_segments
-        for s in (o, o)  # double every time point
-    )
+#     # Double every time point and convert to timestamp if needed
+#     video_segments = list(
+#         _convert_seconds_to_timestamp(s) if isinstance(s, (float, int)) else s
+#         for o in video_segments
+#         for s in (o, o)  # double every time point
+#     )
 
-    # Create a full segment list
-    video_segments = ["00:00:00.000"] + video_segments
-    video_segments.append(_convert_seconds_to_timestamp(probe_duration(input_file)))
-    batched_segments = batched(video_segments, 2)
-    # Use ThreadPoolExecutor to manage rendreing tasks
-    temp_dir: Path = Path(tempfile.mkdtemp())
-    cut_videos = []
-    further_render_tasks: dict[int, FurtherMethod] = {
-        0: even_further,
-        1: odd_further,
-    }
-    with concurrent.futures.ThreadPoolExecutor(
-        max_workers=DEFAULTS.num_cores.value
-    ) as executor:
-        futures = []
+#     # Create a full segment list
+#     video_segments = ["00:00:00.000"] + video_segments
+#     duration = FPRenderTasks().duration(input_file).render()
+#     video_segments.append(_convert_seconds_to_timestamp(duration))
+#     batched_segments = batched(video_segments, 2)
+#     # Use ThreadPoolExecutor to manage rendreing tasks
+#     temp_dir: Path = Path(tempfile.mkdtemp(prefix=DEFAULTS.temp_dir_prefix.value))
+#     cut_videos = []
+#     further_render_tasks: dict[int, FurtherMethod] = {
+#         0: even_further,
+#         1: odd_further,
+#     }
+#     with concurrent.futures.ThreadPoolExecutor(
+#         max_workers=DEFAULTS.num_cores.value
+#     ) as executor:
+#         futures = []
 
-        for i, segment in enumerate(batched_segments):
-            i_remainder = i % 2
+#         for i, segment in enumerate(batched_segments):
+#             i_remainder = i % 2
 
-            # remove unwanted segments
-            if further_render_tasks[i_remainder] == "remove":
-                continue
+#             # remove unwanted segments
+#             if further_render_tasks[i_remainder] == "remove":
+#                 continue
 
-            # cut segments by submitting cut task to the executor
-            start_time: str = segment[0]
-            end_time: str = segment[1]
-            if start_time[:8] == end_time[:8]:
-                logger.info(
-                    f"Sagment is too short to cut, skipping {start_time} ot {end_time}"
-                )
-                continue
-            seg_output_file = temp_dir / f"{i}{input_file.suffix}"
-            cut_videos.append(seg_output_file)
-            ff_cut_task: FFCreateRender = FFRenderTasks().cut(
-                input_file=input_file,
-                output_file=seg_output_file,
-                ss=start_time,
-                to=end_time,
-            )
-            future = executor.submit(ff_cut_task.render)
-            futures.append(future)  # Store the future for tracking
-            future.result()  # Ensures `cut` completes before proceeding
+#             # cut segments by submitting cut task to the executor
+#             start_time: str = segment[0]
+#             end_time: str = segment[1]
+#             if start_time[:8] == end_time[:8]:
+#                 logger.info(
+#                     f"Sagment is too short to cut, skipping {start_time} ot {end_time}"
+#                 )
+#                 continue
+#             seg_output_file = temp_dir / f"{i}{input_file.suffix}"
+#             cut_videos.append(seg_output_file)
+#             ff_cut_task: FFCreateRender = FFRenderTasks().cut(
+#                 input_file=input_file,
+#                 output_file=seg_output_file,
+#                 ss=start_time,
+#                 to=end_time,
+#             )
+#             future = executor.submit(ff_cut_task.render)
+#             futures.append(future)  # Store the future for tracking
+#             future.result()  # Ensures `cut` completes before proceeding
 
-            # Skip further rendering if the segment is to be copied
-            if further_render_tasks[i_remainder] is None:
-                continue
+#             # Skip further rendering if the segment is to be copied
+#             if further_render_tasks[i_remainder] is None:
+#                 continue
 
-            # Submit further render task to the executor
-            future = executor.submit(
-                further_render_tasks[i_remainder],  # type: ignore
-                input_file=seg_output_file,  # type: ignore
-            )
-            futures.append(future)  # Store the future for tracking
-            future.result()
-        # Optionally, wait for all futures to complete
-        # concurrent.futures.wait(futures)
+#             # Submit further render task to the executor
+#             future = executor.submit(
+#                 further_render_tasks[i_remainder],  # type: ignore
+#                 input_file=seg_output_file,  # type: ignore
+#             )
+#             futures.append(future)  # Store the future for tracking
+#             future.result()
+#         # Optionally, wait for all futures to complete
+#         # concurrent.futures.wait(futures)
 
-    try:
-        # Merge the kept segments
-        # Sort the cut video paths by filename by index order
-        cut_videos.sort(key=lambda video_file: int(video_file.stem))
-        FFRenderTasks().merge(cut_videos, output_file).render()
+#     try:
+#         # Merge the kept segments
+#         # Sort the cut video paths by filename by index order
+#         cut_videos.sort(key=lambda video_file: int(video_file.stem))
+#         FFRenderTasks().merge(cut_videos, output_file).render()
 
-        # Clean up temporary files and dir
-        for video_path in cut_videos:
-            os.remove(video_path)
-        os.rmdir(temp_dir)
-        return 0
+#         # Clean up temporary files and dir
+#         for video_path in cut_videos:
+#             os.remove(video_path)
+#         os.rmdir(temp_dir)
+#         return 0
 
-    except Exception as e:
-        logger.error(f"Failed to {task_descripton} for {input_file}. Error: {e}")
-        return 1
+#     except Exception as e:
+#         logger.error(f"Failed to {task_descripton} for {input_file}. Error: {e}")
+#         return 1
 
 
 # Split segments by part
@@ -1282,7 +1337,7 @@ def partion_video(
         output_dir = Path(output_dir)
     output_dir.mkdir(exist_ok=True)
 
-    duration: float = probe_duration(input_file)
+    duration: float = FPRenderTasks().duration(input_file).render()
     video_segments: list[str] = _get_segments_from_parts_count(
         duration,
         partition_config.count,
@@ -1295,7 +1350,7 @@ def partion_video(
 
     try:
         # Split videos
-        temp_dir: Path = Path(tempfile.mkdtemp())
+        temp_dir: Path = Path(tempfile.mkdtemp(prefix=DEFAULTS.temp_dir_prefix.value))
         FFRenderTasks().split_segments(
             input_file=input_file,
             video_segments=video_segments,
@@ -1660,7 +1715,7 @@ def cut_silence(
     non_silence_segments, total_duration, _ = _extract_non_silence_info(non_silence_str)
     logger.info(f"{non_silence_segments = }")
 
-    keyframes = _probe_keyframe(input_file)
+    keyframes = FPRenderTasks().keyframes(input_file).render()
 
     adjusted_segments_config = AdjustSegmentsConfig(
         segments=non_silence_segments,
@@ -1736,7 +1791,7 @@ def cut_motionless(
         logger.error(f"No valid segments found for {input_file}.")
         return ERROR_CODE.NO_VALID_SEGMENTS
 
-    keyframes = _probe_keyframe(input_file)
+    keyframes = FPRenderTasks().keyframes(input_file).render()
 
     adjusted_segments_config = AdjustSegmentsConfig(
         segments=motion_segs,
@@ -1824,9 +1879,7 @@ def _create_cut_sl_kwargs(
         )
         .render()
     )
-    print(f"{non_silence_str = }")
     non_silence_segments, total_duration, _ = _extract_non_silence_info(non_silence_str)
-    print(f"{non_silence_segments = }")
     video_filter_script: Path = _create_cut_segs_filter_tempfile(
         CSFiltersInfo.VIDEO, non_silence_segments
     )
@@ -1874,7 +1927,7 @@ def _create_cut_motionless_kwargs(
 def partial_render_task(
     task: MethodType | FunctionType | Callable, **config
 ) -> FurtherRenderTask:
-    if isinstance(task, MethodType) and task.__self__.__class__ == FFRenderTasks:
+    if "FFRenderTasks" in task.__qualname__:
 
         def _partial(input_file: str | Path, output_file: str | Path) -> Any:
             return task(
@@ -1901,7 +1954,8 @@ class FunctionEnum(Enum):
         cls._member_map_.update(new_enum._member_map_)
 
     def __call__(self, *args, **kwargs):
-        return self.value(*args, **kwargs)
+        # If the value is callable, invoke it to get a fresh instance
+        return self.value
 
 
 class PARTIAL_TASKS(FunctionEnum):
