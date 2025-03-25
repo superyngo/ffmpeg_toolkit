@@ -7,8 +7,9 @@ from .ffmpeg_toolkit import (
     partion_video,
     FPRenderTasks,
     FFRenderTasks,
+    DEFAULTS,
 )
-from . import ffmpeg_types
+from . import types
 
 PACKAGE_NAME = "ffmpeg_converter"
 
@@ -28,5 +29,6 @@ __all__: list[str] = [
     "partion_video",
     "FPRenderTasks",
     "FFRenderTasks",
-    "ffmpeg_types",
+    "DEFAULTS",
+    "types",
 ]

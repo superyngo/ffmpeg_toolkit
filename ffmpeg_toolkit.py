@@ -10,7 +10,7 @@ import tempfile
 import time
 from collections.abc import Generator
 from enum import Enum, StrEnum, auto
-from functools import wraps, partial
+from functools import wraps
 from itertools import accumulate
 from pathlib import Path
 from types import MethodType, FunctionType
@@ -43,7 +43,7 @@ except ImportError:
 from pydantic import BaseModel, Field, field_validator
 
 # Local imports
-from ffmpeg_types import EncodeKwargs, VideoSuffix
+from .types import EncodeKwargs, VideoSuffix, FFKwargs, FunctionEnum
 # import ffmpeg
 
 
@@ -57,7 +57,7 @@ class DEFAULTS(Enum):
     motionless_threshold = 0.0095
     sampling_duration = 0.2
     seg_min_duration = 0
-    temp_dir_prefix = "ffmpeg_toolkit"
+    temp_dir_prefix = "ffmpeg_toolkit_"
 
 
 class ERROR_CODE(Enum):
@@ -116,9 +116,6 @@ class _PROBE_TASKS(StrEnum):
 
 
 # basic
-type FFKwargsValue = str | Path | float | int
-type FFKwargs = dict[str, FFKwargsValue]
-type FurtherKwarks = None | FFKwargs
 type FurtherRenderTask = Callable[..., Any] | PARTIAL_TASKS
 type FurtherMethod = FurtherRenderTask | Literal["remove"] | None
 
@@ -231,6 +228,33 @@ def _ffprobe(**ffkwargs):
         raise e
 
 
+def _handle_output_file_path(
+    input_file: Path, output_file: Path | str | None, task_description: str
+) -> Path:
+    if output_file is None:
+        output_file = (
+            input_file.parent
+            / f"{input_file.stem}_{task_description}{input_file.suffix if input_file.suffix in VideoSuffix else '.' + VideoSuffix.MKV}"
+        )
+    else:
+        output_file = Path(output_file)
+        if output_file == Path():
+            # Using empty path - let FFmpeg handle output (might be for probe operations)
+            pass
+        elif output_file.suffix == "" and output_file.is_file():
+            # Path exists but isn't a directory - this is an error
+            raise ValueError(f"{output_file} exists and is not a directory")
+        elif output_file.suffix == "":
+            # It's a directory (or should be treated as one)
+            # Create directory if needed and build output filename inside it
+            output_file.mkdir(exist_ok=True)
+            output_file = (
+                output_file
+                / f"{input_file.stem}_{task_description}{input_file.suffix if input_file.suffix in VideoSuffix else '.' + VideoSuffix.MKV}"
+            )
+    return output_file
+
+
 class FFRenderException(TypedDict):
     code: int
     message: str
@@ -292,8 +316,8 @@ class FPRenderTasks(FPCreateRender):
     def encode(
         self,
         input_file: str | Path,
-        input_kwargs: Optional[FFKwargs] = None,
-        output_kwargs: Optional[FFKwargs] = None,
+        input_kwargs: FFKwargs | None = None,
+        output_kwargs: FFKwargs | None = None,
     ) -> FPCreateRender:
         defalut_output_kwargs: FFKwargs = {
             "v": "error",
@@ -359,8 +383,8 @@ class FPRenderTasks(FPCreateRender):
     def is_valid_video(
         self,
         input_file: str | Path,
-        input_kwargs: Optional[FFKwargs] = None,
-        output_kwargs: Optional[FFKwargs] = None,
+        input_kwargs: FFKwargs | None = None,
+        output_kwargs: FFKwargs | None = None,
     ) -> FPCreateRender:
         defalut_output_kwargs: FFKwargs = {
             "v": "error",
@@ -392,8 +416,8 @@ class FPRenderTasks(FPCreateRender):
     def duration(
         self,
         input_file: str | Path,
-        input_kwargs: Optional[FFKwargs] = None,
-        output_kwargs: Optional[FFKwargs] = None,
+        input_kwargs: FFKwargs | None = None,
+        output_kwargs: FFKwargs | None = None,
     ) -> FPCreateRender:
         defalut_output_kwargs: FFKwargs = {
             "v": "error",
@@ -419,8 +443,8 @@ class FPRenderTasks(FPCreateRender):
     def keyframes(
         self,
         input_file: str | Path,
-        input_kwargs: Optional[FFKwargs] = None,
-        output_kwargs: Optional[FFKwargs] = None,
+        input_kwargs: FFKwargs | None = None,
+        output_kwargs: FFKwargs | None = None,
     ) -> FPCreateRender:
         defalut_output_kwargs: FFKwargs = {
             "v": "error",
@@ -453,8 +477,8 @@ class FPRenderTasks(FPCreateRender):
     def frame_per_s(
         self,
         input_file: str | Path,
-        input_kwargs: Optional[FFKwargs] = None,
-        output_kwargs: Optional[FFKwargs] = None,
+        input_kwargs: FFKwargs | None = None,
+        output_kwargs: FFKwargs | None = None,
     ) -> FPCreateRender:
         defalut_output_kwargs: FFKwargs = {
             "v": "error",
@@ -488,25 +512,19 @@ class FFCreateCommand(BaseModel):
 
 class FFCreateRender(FFCreateCommand):
     task_descripton: str = "render"
+    delete_after: bool = False
     exception: Optional[FFRenderException] = None
     post_task: Optional[Callable[..., Any]] = None
+    return_output: bool = False
 
     def render(self) -> Any:
         _shadow = copy.copy(self)
         _shadow.input_file = Path(_shadow.input_file)
 
         # Handle output file path
-        if _shadow.output_file is None:
-            _shadow.output_file = (
-                _shadow.input_file.parent
-                / f"{_shadow.input_file.stem}_{_shadow.task_descripton}{
-                    _shadow.input_file.suffix
-                    if _shadow.input_file.suffix in VideoSuffix
-                    else '.' + VideoSuffix.MKV
-                }"
-            )
-        else:
-            _shadow.output_file = Path(_shadow.output_file)
+        _shadow.output_file = _handle_output_file_path(
+            _shadow.input_file, _shadow.output_file, _shadow.task_descripton
+        )
 
         # Handle temp output file path
         if _shadow.output_file == Path() or r"%d" in str(_shadow.output_file):
@@ -533,6 +551,8 @@ class FFCreateRender(FFCreateCommand):
             "exception",
             "post_task",
             "output_file",
+            "delete_after",
+            "return_output",
         ]
         fp_command = {
             k: v for k, v in _shadow.model_dump().items() if k not in unwated_key
@@ -550,9 +570,15 @@ class FFCreateRender(FFCreateCommand):
             ):
                 temp_output_file.replace(_shadow.output_file)
 
-            # Return post task if exists
+            if self.delete_after:
+                os.remove(_shadow.input_file)
+
+            # Do post task if exists
             if _shadow.post_task is not None:
                 return _shadow.post_task(result)
+
+            if _shadow.return_output:
+                return _shadow.output_file
 
             return result
         except Exception as e:
@@ -567,8 +593,8 @@ class FFRenderTasks(FFCreateRender):
         self,
         input_file: Path | str,
         output_file: Optional[Path | str] = None,
-        input_kwargs: Optional[FFKwargs] = None,
-        output_kwargs: Optional[FFKwargs] = None,
+        input_kwargs: FFKwargs | None = None,
+        output_kwargs: FFKwargs | None = None,
     ) -> FFCreateRender:
         self.input_file = input_file
         self.output_file = output_file
@@ -585,8 +611,8 @@ class FFRenderTasks(FFCreateRender):
         ss: str = "00:00:00",
         to: str = "00:00:01",
         rerender: bool = False,
-        input_kwargs: Optional[FFKwargs] = None,
-        output_kwargs: Optional[FFKwargs] = None,
+        input_kwargs: FFKwargs | None = None,
+        output_kwargs: FFKwargs | None = None,
     ) -> FFCreateRender:
         self.task_descripton = f"{_TASKS.CUT}_{_convert_timestamp_to_seconds(ss)}-{_convert_timestamp_to_seconds(to)}"
         self.input_file = input_file
@@ -608,8 +634,8 @@ class FFRenderTasks(FFCreateRender):
         input_file: Path | str,
         output_file: Optional[Path | str] = None,
         multiple: float | int = 2,
-        input_kwargs: Optional[FFKwargs] = None,
-        output_kwargs: Optional[FFKwargs] = None,
+        input_kwargs: FFKwargs | None = None,
+        output_kwargs: FFKwargs | None = None,
     ) -> FFCreateRender:
         self.task_descripton = f"{_TASKS.SPEEDUP}_by_{multiple}"
         self.input_file = input_file
@@ -644,8 +670,8 @@ class FFRenderTasks(FFCreateRender):
         b2_duration: float = 5,
         b1_multiple: float = 1,  # 0 means remove this part
         b2_multiple: float = 0,  # 0 means remove this part
-        input_kwargs: Optional[FFKwargs] = None,
-        output_kwargs: Optional[FFKwargs] = None,
+        input_kwargs: FFKwargs | None = None,
+        output_kwargs: FFKwargs | None = None,
     ) -> FFCreateRender:
         self.task_descripton = f"{_TASKS.JUMPCUT}_b1({b1_duration}x{b1_multiple})_b2({b2_duration}x{b2_multiple})"
         self.input_file = input_file
@@ -675,8 +701,8 @@ class FFRenderTasks(FFCreateRender):
         self,
         input_dir_or_files: Path | str | list[Path] | list[str],
         output_file: Path | None = None,
-        input_kwargs: Optional[FFKwargs] = None,
-        output_kwargs: Optional[FFKwargs] = None,
+        input_kwargs: FFKwargs | None = None,
+        output_kwargs: FFKwargs | None = None,
     ) -> FFCreateRender:
         # Create input.txt
         if isinstance(input_dir_or_files, Iterable):
@@ -696,7 +722,7 @@ class FFRenderTasks(FFCreateRender):
             "c:v": "copy",
         } | ({} if output_kwargs is None else output_kwargs)
 
-        def post_task(_):
+        def post_task(_result):
             os.remove(input_txt)
             if not any(input_txt.parent.iterdir()):
                 os.rmdir(input_txt.parent)
@@ -711,8 +737,8 @@ class FFRenderTasks(FFCreateRender):
         input_file: Path | str,
         dB: int = DEFAULTS.db_threshold.value,
         sampling_duration: float = DEFAULTS.sampling_duration.value,
-        input_kwargs: Optional[FFKwargs] = None,
-        output_kwargs: Optional[FFKwargs] = None,
+        input_kwargs: FFKwargs | None = None,
+        output_kwargs: FFKwargs | None = None,
     ) -> FFCreateRender:
         self.task_descripton = f"{_TASKS.GET_NON_SILENCE_SEGS}_by_{dB}"
         self.input_file = input_file
@@ -738,8 +764,8 @@ class FFRenderTasks(FFCreateRender):
         output_file: Path | str | None = None,
         dB: int = DEFAULTS.db_threshold.value,
         sampling_duration: float = DEFAULTS.sampling_duration.value,
-        input_kwargs: Optional[FFKwargs] = None,
-        output_kwargs: Optional[FFKwargs] = None,
+        input_kwargs: FFKwargs | None = None,
+        output_kwargs: FFKwargs | None = None,
     ) -> FFCreateRender:
         self.task_descripton = f"{_TASKS.CUT_SILENCE_RERENDER}_by_{dB}"
         self.input_file = input_file
@@ -750,7 +776,7 @@ class FFRenderTasks(FFCreateRender):
             input_file, dB, sampling_duration
         ) | ({} if output_kwargs is None else output_kwargs)
 
-        def post_task(_):
+        def post_task(_result):
             os.remove(str(output_kwargs["filter_script:v"]))
             os.remove(str(output_kwargs["filter_script:a"]))
 
@@ -764,8 +790,8 @@ class FFRenderTasks(FFCreateRender):
         output_file: Path | str | None = None,
         threshold: float = DEFAULTS.motionless_threshold.value,
         sampling_duration: float = DEFAULTS.sampling_duration.value,
-        input_kwargs: Optional[FFKwargs] = None,
-        output_kwargs: Optional[FFKwargs] = None,
+        input_kwargs: FFKwargs | None = None,
+        output_kwargs: FFKwargs | None = None,
     ) -> FFCreateRender:
         self.task_descripton = f"{_TASKS.CUT_MOTIONLESS_RERENDER}_by_{threshold}"
         self.input_file = input_file
@@ -776,7 +802,7 @@ class FFRenderTasks(FFCreateRender):
             input_file, threshold, sampling_duration
         ) | ({} if output_kwargs is None else output_kwargs)
 
-        def post_task(_):
+        def post_task(_result):
             os.remove(str(output_kwargs["filter_script:v"]))
             os.remove(str(output_kwargs["filter_script:a"]))
 
@@ -789,8 +815,8 @@ class FFRenderTasks(FFCreateRender):
         input_file: Path | str,
         video_segments: list[str],
         output_dir: Optional[Path | str] = None,
-        input_kwargs: Optional[FFKwargs] = None,
-        output_kwargs: Optional[FFKwargs] = None,
+        input_kwargs: FFKwargs | None = None,
+        output_kwargs: FFKwargs | None = None,
     ) -> FFCreateRender:
         self.task_descripton = f"{_TASKS.SPLIT}"
         input_file = Path(input_file)
@@ -827,8 +853,8 @@ class FFRenderTasks(FFCreateRender):
         self,
         input_file: Path | str,
         sampling_duration: float = DEFAULTS.sampling_duration.value,
-        input_kwargs: Optional[FFKwargs] = None,
-        output_kwargs: Optional[FFKwargs] = None,
+        input_kwargs: FFKwargs | None = None,
+        output_kwargs: FFKwargs | None = None,
     ) -> FFCreateRender:
         self.task_descripton = f"{_TASKS.GET_MOTION_SEGS}"
         self.input_file = input_file = Path(input_file)
@@ -966,17 +992,13 @@ def advanced_keep_or_remove_by_split_segs(
     even_further: FurtherMethod = "remove",  # For other segments, remove means remove, None means copy
     odd_further: FurtherMethod = None,  # For segments, remove means remove, None means copy
     remove_temp_handle: bool = True,
-) -> int:
+    delete_after: bool = False,
+) -> int | Path:
     task_descripton = _TASKS.KEEP_OR_REMOVE + "_split"
     input_file = Path(input_file)
 
-    # Set the output file path
-    if output_file is None:
-        output_file = input_file.parent / (
-            input_file.stem + "_" + task_descripton + input_file.suffix
-        )
-    else:
-        output_file = Path(output_file)
+    # Handle output file path
+    output_file = _handle_output_file_path(input_file, output_file, task_descripton)
 
     logger.info(
         f"{task_descripton.capitalize()} {input_file.name} to {output_file.name} with {even_further = } ,{odd_further = }."
@@ -991,7 +1013,7 @@ def advanced_keep_or_remove_by_split_segs(
     try:
         # Split videos
         temp_dir: Path = Path(tempfile.mkdtemp(prefix=DEFAULTS.temp_dir_prefix.value))
-        FFRenderTasks().split_segments(
+        FFRenderTasks(delete_after=delete_after).split_segments(
             input_file=input_file,
             video_segments=video_segments,
             output_dir=temp_dir,
@@ -1016,9 +1038,7 @@ def advanced_keep_or_remove_by_split_segs(
             for video in video_files:
                 index = int(video.stem.split("_")[0])
                 i_remainder = index % 2
-                further_method: FurtherMethod = copy.deepcopy(
-                    further_methods[i_remainder]
-                )
+                further_method: FurtherMethod = further_methods[i_remainder]
 
                 # Remove unwanted segments
                 if further_method == "remove":
@@ -1051,116 +1071,12 @@ def advanced_keep_or_remove_by_split_segs(
             for video in temp_dir.iterdir():
                 os.remove(video)
             os.rmdir(temp_dir)
-        return 0
+
+        return output_file
 
     except Exception as e:
         logger.error(f"Failed to {task_descripton} for {input_file}. Error: {e}")
         return 1
-
-
-# keep or remove copy/rendering by cuts
-# def advanced_keep_or_remove_by_cuts(
-#     input_file: Path | str,
-#     output_file: Path | str | None,
-#     video_segments: list[str] | list[float],
-#     even_further: FurtherMethod = "remove",  # For other segments, remove means remove, None means copy
-#     odd_further: FurtherMethod = None,  # For segments, remove means remove, None means copy
-# ) -> int:
-#     task_descripton = _TASKS.KEEP_OR_REMOVE
-#     input_file = Path(input_file)
-
-#     # Set the output file path
-#     if output_file is None:
-#         output_file = input_file.parent / (
-#             input_file.stem + "_" + task_descripton + input_file.suffix
-#         )
-#     else:
-#         output_file = Path(output_file)
-
-#     logger.info(
-#         f"{task_descripton.capitalize()} {input_file.name} to {output_file.name} with {even_further = } ,{odd_further = }."
-#     )
-
-#     # Double every time point and convert to timestamp if needed
-#     video_segments = list(
-#         _convert_seconds_to_timestamp(s) if isinstance(s, (float, int)) else s
-#         for o in video_segments
-#         for s in (o, o)  # double every time point
-#     )
-
-#     # Create a full segment list
-#     video_segments = ["00:00:00.000"] + video_segments
-#     duration = FPRenderTasks().duration(input_file).render()
-#     video_segments.append(_convert_seconds_to_timestamp(duration))
-#     batched_segments = batched(video_segments, 2)
-#     # Use ThreadPoolExecutor to manage rendreing tasks
-#     temp_dir: Path = Path(tempfile.mkdtemp(prefix=DEFAULTS.temp_dir_prefix.value))
-#     cut_videos = []
-#     further_render_tasks: dict[int, FurtherMethod] = {
-#         0: even_further,
-#         1: odd_further,
-#     }
-#     with concurrent.futures.ThreadPoolExecutor(
-#         max_workers=DEFAULTS.num_cores.value
-#     ) as executor:
-#         futures = []
-
-#         for i, segment in enumerate(batched_segments):
-#             i_remainder = i % 2
-
-#             # remove unwanted segments
-#             if further_render_tasks[i_remainder] == "remove":
-#                 continue
-
-#             # cut segments by submitting cut task to the executor
-#             start_time: str = segment[0]
-#             end_time: str = segment[1]
-#             if start_time[:8] == end_time[:8]:
-#                 logger.info(
-#                     f"Sagment is too short to cut, skipping {start_time} ot {end_time}"
-#                 )
-#                 continue
-#             seg_output_file = temp_dir / f"{i}{input_file.suffix}"
-#             cut_videos.append(seg_output_file)
-#             ff_cut_task: FFCreateRender = FFRenderTasks().cut(
-#                 input_file=input_file,
-#                 output_file=seg_output_file,
-#                 ss=start_time,
-#                 to=end_time,
-#             )
-#             future = executor.submit(ff_cut_task.render)
-#             futures.append(future)  # Store the future for tracking
-#             future.result()  # Ensures `cut` completes before proceeding
-
-#             # Skip further rendering if the segment is to be copied
-#             if further_render_tasks[i_remainder] is None:
-#                 continue
-
-#             # Submit further render task to the executor
-#             future = executor.submit(
-#                 further_render_tasks[i_remainder],  # type: ignore
-#                 input_file=seg_output_file,  # type: ignore
-#             )
-#             futures.append(future)  # Store the future for tracking
-#             future.result()
-#         # Optionally, wait for all futures to complete
-#         # concurrent.futures.wait(futures)
-
-#     try:
-#         # Merge the kept segments
-#         # Sort the cut video paths by filename by index order
-#         cut_videos.sort(key=lambda video_file: int(video_file.stem))
-#         FFRenderTasks().merge(cut_videos, output_file).render()
-
-#         # Clean up temporary files and dir
-#         for video_path in cut_videos:
-#             os.remove(video_path)
-#         os.rmdir(temp_dir)
-#         return 0
-
-#     except Exception as e:
-#         logger.error(f"Failed to {task_descripton} for {input_file}. Error: {e}")
-#         return 1
 
 
 # Split segments by part
@@ -1232,7 +1148,8 @@ def partion_video(
     partition_config: Optional[PartitionConfig] = None,
     output_dir: Optional[Path | str] = None,
     output_file: Path | str | None = None,
-) -> int:
+    delete_after: bool = False,
+) -> Path | ERROR_CODE | int:
     if partition_config is None:
         partition_config = PartitionConfig()
 
@@ -1258,7 +1175,7 @@ def partion_video(
     try:
         # Split videos
         temp_dir: Path = Path(tempfile.mkdtemp(prefix=DEFAULTS.temp_dir_prefix.value))
-        FFRenderTasks().split_segments(
+        FFRenderTasks(delete_after=delete_after).split_segments(
             input_file=input_file,
             video_segments=video_segments,
             output_dir=temp_dir,
@@ -1311,16 +1228,20 @@ def partion_video(
         os.rmdir(temp_dir)
 
         if output_file is not None:
+            output_file = _handle_output_file_path(
+                input_file, output_file, task_descripton
+            )
             FFRenderTasks().merge(
                 input_dir_or_files=new_video_files,  # type:ignore
                 output_file=Path(output_file),
             ).render()  # type:ignore
+            return output_file
 
         return 0
 
     except Exception as e:
         logger.error(f"Failed to {task_descripton} for {input_file}. Error: {e}")
-        return 1
+        raise e
 
 
 # cut silence copy / render
@@ -1585,7 +1506,8 @@ def cut_silence(
     seg_min_duration: float = DEFAULTS.seg_min_duration.value,
     even_further: FurtherMethod = "remove",  # For other segments, remove means remove, None means copy
     odd_further: FurtherMethod = None,  # For segments, remove means remove, None means copy
-) -> int | Enum:
+    delete_after: bool = False,
+) -> Path | ERROR_CODE:
     class ERROR_CODE(Enum):
         DURATION_LESS_THAN_ZERO = auto()
         NO_VALID_SEGMENTS = auto()
@@ -1599,12 +1521,10 @@ def cut_silence(
     task_descripton = f"{_TASKS.CUT_SILENCE}_by_{dB}"
     input_file = Path(input_file)
 
-    if output_file is None:
-        output_file = input_file.parent / (
-            input_file.stem + "_" + task_descripton + input_file.suffix
-        )
-    else:
-        output_file = Path(output_file)
+    # Handle output file path
+    output_file = _handle_output_file_path(input_file, output_file, task_descripton)
+
+    # Handle temp output file
     temp_output_file: Path = output_file.parent / (
         output_file.stem + "_processing" + output_file.suffix
     )
@@ -1616,7 +1536,9 @@ def cut_silence(
     non_silence_str: str = str(
         FFRenderTasks()
         .get_silence_segs(
-            input_file=input_file, dB=dB, sampling_duration=sampling_duration
+            input_file=input_file,
+            dB=dB,
+            sampling_duration=sampling_duration,
         )
         .render()
     )
@@ -1645,9 +1567,11 @@ def cut_silence(
             video_segments=adjusted_segments,
             even_further=even_further,
             odd_further=odd_further,
+            delete_after=delete_after,
         )
         temp_output_file.replace(output_file)
-        return 0
+
+        return output_file
 
     except Exception as e:
         logger.error(f"Failed to {task_descripton} for {input_file}. Error: {e}")
@@ -1664,7 +1588,7 @@ def cut_motionless(
     seg_min_duration: float = DEFAULTS.seg_min_duration.value,
     even_further: FurtherMethod = "remove",  # For other segments, remove means remove, None means copy
     odd_further: FurtherMethod = None,  # For segments, remove means remove, None means copy
-) -> int | Enum:
+) -> Path | ERROR_CODE:
     if sampling_duration <= 0:
         logger.error("Duration must be greater than 0.")
         return ERROR_CODE.DURATION_LESS_THAN_ZERO
@@ -1673,12 +1597,10 @@ def cut_motionless(
     task_descripton = f"{_TASKS.CUT_MOTIONLESS}_by_{threshold}"
     input_file = Path(input_file)
 
-    if output_file is None:
-        output_file = input_file.parent / (
-            input_file.stem + "_" + task_descripton + input_file.suffix
-        )
-    else:
-        output_file = Path(output_file)
+    # Handle output file path
+    output_file = _handle_output_file_path(input_file, output_file, task_descripton)
+
+    # Handle temp output file
     temp_output_file: Path = output_file.parent / (
         output_file.stem + "_processing" + output_file.suffix
     )
@@ -1723,12 +1645,11 @@ def cut_motionless(
             odd_further=odd_further,
         )
         temp_output_file.replace(output_file)
-        return 0
+        return Path
 
     except Exception as e:
         logger.error(f"Failed to {task_descripton} for {input_file}. Error: {e}")
         raise e
-        # return ERROR_CODE.FAILED_TO_CUT
 
 
 # cut rerender
@@ -1849,32 +1770,19 @@ def _partial_render_task(
     return _partial
 
 
-class FunctionEnum(Enum):
-    @classmethod
-    def register(cls, name, func, *args, **kwargs):
-        if not isinstance(func, FunctionType):
-            raise TypeError("Only functions can be registered.")
-
-        partial_func = partial(func, *args, **kwargs)
-        new_enum = Enum(
-            cls.__name__, {**{e.name: e.value for e in cls}, name: partial_func}
-        )
-        cls._member_map_.update(new_enum._member_map_)
-
-    def __call__(self, *args, **kwargs):
-        # If the value is callable, invoke it to get a fresh instance
-        return self.value
-
-
 class PARTIAL_TASKS(FunctionEnum):
     @staticmethod
     def speedup(
         multiple: float | int = 2,
-        input_kwargs: Optional[FFKwargs] = None,
-        output_kwargs: Optional[FFKwargs] = None,
+        input_kwargs: FFKwargs | None = None,
+        output_kwargs: FFKwargs | None = None,
+        delete_after: bool = False,
+        return_output: bool = False,
     ):
         return _partial_render_task(
-            task=FFRenderTasks().speedup,
+            task=FFRenderTasks(
+                delete_after=delete_after, return_output=return_output
+            ).speedup,
             multiple=multiple,
             input_kwargs=input_kwargs,
             output_kwargs=output_kwargs,
@@ -1886,11 +1794,15 @@ class PARTIAL_TASKS(FunctionEnum):
         b2_duration: float = 5,
         b1_multiple: float = 1,  # 0 means remove this part
         b2_multiple: float = 0,  # 0 means remove this part
-        input_kwargs: Optional[FFKwargs] = None,
-        output_kwargs: Optional[FFKwargs] = None,
+        input_kwargs: FFKwargs | None = None,
+        output_kwargs: FFKwargs | None = None,
+        delete_after: bool = False,
+        return_output: bool = False,
     ):
         return _partial_render_task(
-            task=FFRenderTasks().jumpcut,
+            task=FFRenderTasks(
+                delete_after=delete_after, return_output=return_output
+            ).jumpcut,
             b1_duration=b1_duration,
             b2_duration=b2_duration,
             b1_multiple=b1_multiple,
@@ -1901,11 +1813,15 @@ class PARTIAL_TASKS(FunctionEnum):
 
     @staticmethod
     def custom(
-        input_kwargs: Optional[FFKwargs] = None,
-        output_kwargs: Optional[FFKwargs] = None,
+        input_kwargs: FFKwargs | None = None,
+        output_kwargs: FFKwargs | None = None,
+        delete_after: bool = False,
+        return_output: bool = False,
     ):
         return _partial_render_task(
-            task=FFRenderTasks().custom,
+            task=FFRenderTasks(
+                delete_after=delete_after, return_output=return_output
+            ).custom,
             input_kwargs=input_kwargs,
             output_kwargs=output_kwargs,
         )
@@ -1915,11 +1831,15 @@ class PARTIAL_TASKS(FunctionEnum):
         ss: str = "00:00:00",
         to: str = "00:00:01",
         rerender: bool = False,
-        input_kwargs: Optional[FFKwargs] = None,
-        output_kwargs: Optional[FFKwargs] = None,
+        input_kwargs: FFKwargs | None = None,
+        output_kwargs: FFKwargs | None = None,
+        delete_after: bool = False,
+        return_output: bool = False,
     ):
         return _partial_render_task(
-            task=FFRenderTasks().cut,
+            task=FFRenderTasks(
+                delete_after=delete_after, return_output=return_output
+            ).cut,
             ss=ss,
             to=to,
             rerender=rerender,
@@ -1931,11 +1851,15 @@ class PARTIAL_TASKS(FunctionEnum):
     def cut_silence_rerender(
         dB: int = DEFAULTS.db_threshold.value,
         sampling_duration: float = DEFAULTS.sampling_duration.value,
-        input_kwargs: Optional[FFKwargs] = None,
-        output_kwargs: Optional[FFKwargs] = None,
+        input_kwargs: FFKwargs | None = None,
+        output_kwargs: FFKwargs | None = None,
+        delete_after: bool = False,
+        return_output: bool = False,
     ):
         return _partial_render_task(
-            task=FFRenderTasks().cut_silence_rerender,
+            task=FFRenderTasks(
+                delete_after=delete_after, return_output=return_output
+            ).cut_silence_rerender,
             dB=dB,
             sampling_duration=sampling_duration,
             input_kwargs=input_kwargs,
@@ -1949,6 +1873,7 @@ class PARTIAL_TASKS(FunctionEnum):
         seg_min_duration: float = DEFAULTS.seg_min_duration.value,
         even_further: FurtherMethod = "remove",  # For other segments, remove means remove, None means copy
         odd_further: FurtherMethod = None,
+        delete_after: bool = False,
     ):  # For segments, remove means remove, None means copy
         return _partial_render_task(
             task=cut_silence,
@@ -1957,6 +1882,7 @@ class PARTIAL_TASKS(FunctionEnum):
             seg_min_duration=seg_min_duration,
             even_further=even_further,
             odd_further=odd_further,
+            delete_after=delete_after,
         )
 
     @staticmethod
@@ -1966,6 +1892,7 @@ class PARTIAL_TASKS(FunctionEnum):
         seg_min_duration: float = DEFAULTS.seg_min_duration.value,
         even_further: FurtherMethod = "remove",  # For other segments, remove means remove, None means copy
         odd_further: FurtherMethod = None,  # For segments, remove means remove, None means copy
+        delete_after: bool = False,
     ):
         return _partial_render_task(
             task=cut_motionless,
@@ -1974,6 +1901,7 @@ class PARTIAL_TASKS(FunctionEnum):
             seg_min_duration=seg_min_duration,
             even_further=even_further,
             odd_further=odd_further,
+            delete_after=delete_after,
         )
 
     @staticmethod
@@ -1981,10 +1909,117 @@ class PARTIAL_TASKS(FunctionEnum):
         partition_config: Optional[PartitionConfig] = None,
         output_dir: Optional[Path | str] = None,
         output_file: Path | str | None = None,
+        delete_after: bool = False,
     ):
         return _partial_render_task(
             task=partion_video,
             partition_config=partition_config,
             output_dir=output_dir,
             output_file=output_file,
+            delete_after=delete_after,
         )
+
+
+# keep or remove copy/rendering by cuts
+# def advanced_keep_or_remove_by_cuts(
+#     input_file: Path | str,
+#     output_file: Path | str | None,
+#     video_segments: list[str] | list[float],
+#     even_further: FurtherMethod = "remove",  # For other segments, remove means remove, None means copy
+#     odd_further: FurtherMethod = None,  # For segments, remove means remove, None means copy
+# ) -> int:
+#     task_descripton = _TASKS.KEEP_OR_REMOVE
+#     input_file = Path(input_file)
+
+#     # Set the output file path
+#     if output_file is None:
+#         output_file = input_file.parent / (
+#             input_file.stem + "_" + task_descripton + input_file.suffix
+#         )
+#     else:
+#         output_file = Path(output_file)
+
+#     logger.info(
+#         f"{task_descripton.capitalize()} {input_file.name} to {output_file.name} with {even_further = } ,{odd_further = }."
+#     )
+
+#     # Double every time point and convert to timestamp if needed
+#     video_segments = list(
+#         _convert_seconds_to_timestamp(s) if isinstance(s, (float, int)) else s
+#         for o in video_segments
+#         for s in (o, o)  # double every time point
+#     )
+
+#     # Create a full segment list
+#     video_segments = ["00:00:00.000"] + video_segments
+#     duration = FPRenderTasks().duration(input_file).render()
+#     video_segments.append(_convert_seconds_to_timestamp(duration))
+#     batched_segments = batched(video_segments, 2)
+#     # Use ThreadPoolExecutor to manage rendreing tasks
+#     temp_dir: Path = Path(tempfile.mkdtemp(prefix=DEFAULTS.temp_dir_prefix.value))
+#     cut_videos = []
+#     further_render_tasks: dict[int, FurtherMethod] = {
+#         0: even_further,
+#         1: odd_further,
+#     }
+#     with concurrent.futures.ThreadPoolExecutor(
+#         max_workers=DEFAULTS.num_cores.value
+#     ) as executor:
+#         futures = []
+
+#         for i, segment in enumerate(batched_segments):
+#             i_remainder = i % 2
+
+#             # remove unwanted segments
+#             if further_render_tasks[i_remainder] == "remove":
+#                 continue
+
+#             # cut segments by submitting cut task to the executor
+#             start_time: str = segment[0]
+#             end_time: str = segment[1]
+#             if start_time[:8] == end_time[:8]:
+#                 logger.info(
+#                     f"Sagment is too short to cut, skipping {start_time} ot {end_time}"
+#                 )
+#                 continue
+#             seg_output_file = temp_dir / f"{i}{input_file.suffix}"
+#             cut_videos.append(seg_output_file)
+#             ff_cut_task: FFCreateRender = FFRenderTasks().cut(
+#                 input_file=input_file,
+#                 output_file=seg_output_file,
+#                 ss=start_time,
+#                 to=end_time,
+#             )
+#             future = executor.submit(ff_cut_task.render)
+#             futures.append(future)  # Store the future for tracking
+#             future.result()  # Ensures `cut` completes before proceeding
+
+#             # Skip further rendering if the segment is to be copied
+#             if further_render_tasks[i_remainder] is None:
+#                 continue
+
+#             # Submit further render task to the executor
+#             future = executor.submit(
+#                 further_render_tasks[i_remainder],  # type: ignore
+#                 input_file=seg_output_file,  # type: ignore
+#             )
+#             futures.append(future)  # Store the future for tracking
+#             future.result()
+#         # Optionally, wait for all futures to complete
+#         # concurrent.futures.wait(futures)
+
+#     try:
+#         # Merge the kept segments
+#         # Sort the cut video paths by filename by index order
+#         cut_videos.sort(key=lambda video_file: int(video_file.stem))
+#         FFRenderTasks().merge(cut_videos, output_file).render()
+
+#         # Clean up temporary files and dir
+#         for video_path in cut_videos:
+#             os.remove(video_path)
+#         os.rmdir(temp_dir)
+#         return 0
+
+#     except Exception as e:
+#         logger.error(f"Failed to {task_descripton} for {input_file}. Error: {e}")
+#         return 1
