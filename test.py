@@ -46,9 +46,8 @@ partition_config = ffmpeg_toolkit.PartitionConfig(
     portion_method=[
         (1, ffmpeg_toolkit.PARTIAL_TASKS.custom()),
         (1, ffmpeg_toolkit.PARTIAL_TASKS.jumpcut(**jumpcut_args)),
-        (1, ffmpeg_toolkit.PARTIAL_TASKS.speedup(multiple=5)),
-        (1, ffmpeg_toolkit.PARTIAL_TASKS.speedup(multiple=6)),
-        (1, ffmpeg_toolkit.PARTIAL_TASKS.speedup(multiple=3)),
+        (1, ffmpeg_toolkit.PARTIAL_TASKS.cut_silence()),
+        (1, ffmpeg_toolkit.PARTIAL_TASKS.cut_motionless()),
         (1, ffmpeg_toolkit.PARTIAL_TASKS.speedup(multiple=2)),
     ]
 )
@@ -59,9 +58,7 @@ partition_config = ffmpeg_toolkit.PartitionConfig(
 # )
 
 
-ffmpeg_toolkit.partion_video(
-    input_file, partition_config, output_file=input_file.parent / "rendered1.mkv"
-)
+ffmpeg_toolkit.partion_video(input_file, partition_config)
 
 
 # code.interact(local=globals())

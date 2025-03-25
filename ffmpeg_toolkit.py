@@ -43,7 +43,7 @@ except ImportError:
 from pydantic import BaseModel, Field, field_validator
 
 # Local imports
-from .types import EncodeKwargs, VideoSuffix, FFKwargs, FunctionEnum
+from ffmpeg_types import EncodeKwargs, VideoSuffix, FFKwargs, FunctionEnum
 # import ffmpeg
 
 
@@ -52,6 +52,7 @@ class DEFAULTS(Enum):
     hwaccel = "auto"
     loglevel = "warning"
     keyframe_interval = 2
+    speedup_multiple = 2
     speedup_task_threshold = 5
     db_threshold = -21
     motionless_threshold = 0.0095
@@ -201,14 +202,14 @@ def _dic_to_ffmpeg_kwargs(kwargs: dict | None = None) -> list[str]:
 
 
 @timing
-def _ffmpeg(**ffkwargs) -> str:
+def _ffmpeg(**ffkwargs) -> subprocess.CompletedProcess[str]:
     command = ["ffmpeg"] + _dic_to_ffmpeg_kwargs(ffkwargs)
     logger.info(f"Executing FFmpeg command: {' '.join(command)}")
     try:
         result = subprocess.run(
             command, capture_output=True, text=True, check=True, encoding="utf-8"
         )
-        return result.stdout.strip() + result.stderr.strip()
+        return result
     except subprocess.CalledProcessError as e:
         logger.error(f"Failed to execute FFmpeg. Error: {e}")
         raise e
@@ -515,7 +516,7 @@ class FFCreateRender(FFCreateCommand):
     delete_after: bool = False
     exception: Optional[FFRenderException] = None
     post_task: Optional[Callable[..., Any]] = None
-    return_output: bool = False
+    return_result: bool = False
 
     def render(self) -> Any:
         _shadow = copy.copy(self)
@@ -552,7 +553,7 @@ class FFCreateRender(FFCreateCommand):
             "post_task",
             "output_file",
             "delete_after",
-            "return_output",
+            "return_result",
         ]
         fp_command = {
             k: v for k, v in _shadow.model_dump().items() if k not in unwated_key
@@ -564,7 +565,7 @@ class FFCreateRender(FFCreateCommand):
         )
 
         try:
-            result: str = _ffmpeg(**ff_kwargs)
+            result: subprocess.CompletedProcess[str] = _ffmpeg(**ff_kwargs)
             if temp_output_file != _shadow.output_file and r"%" not in str(
                 temp_output_file.stem
             ):
@@ -577,10 +578,10 @@ class FFCreateRender(FFCreateCommand):
             if _shadow.post_task is not None:
                 return _shadow.post_task(result)
 
-            if _shadow.return_output:
-                return _shadow.output_file
+            if _shadow.return_result:
+                return result.stdout.strip() + result.stderr.strip()
 
-            return result
+            return _shadow.output_file
         except Exception as e:
             logger.error(
                 f"Failed to do {_shadow.task_descripton} videos for {_shadow.input_file}. Error: {e}"
@@ -633,7 +634,7 @@ class FFRenderTasks(FFCreateRender):
         self,
         input_file: Path | str,
         output_file: Optional[Path | str] = None,
-        multiple: float | int = 2,
+        multiple: float | int = DEFAULTS.speedup_multiple.value,
         input_kwargs: FFKwargs | None = None,
         output_kwargs: FFKwargs | None = None,
     ) -> FFCreateRender:
@@ -755,6 +756,34 @@ class FFRenderTasks(FFCreateRender):
             | ({} if output_kwargs is None else output_kwargs)
             | {"": ""}
         )
+        self.return_result = True
+
+        return self
+
+    def get_motion_segs(
+        self,
+        input_file: Path | str,
+        sampling_duration: float = DEFAULTS.sampling_duration.value,
+        input_kwargs: FFKwargs | None = None,
+        output_kwargs: FFKwargs | None = None,
+    ) -> FFCreateRender:
+        self.task_descripton = f"{_TASKS.GET_MOTION_SEGS}"
+        self.input_file = input_file = Path(input_file)
+        self.output_file = Path()
+        if input_kwargs is not None:
+            self.input_kwargs = input_kwargs
+        frame_per_second: str = FPRenderTasks().frame_per_s(input_file).render()
+        self.output_kwargs = (
+            {
+                "vf": f"select='not(mod(n,floor({frame_per_second})*{sampling_duration}))*gte(scene,0)',metadata=print",
+                "an": "",
+                "loglevel": "info",
+                "f": "null",
+            }
+            | ({} if output_kwargs is None else output_kwargs)
+            | {"": ""}
+        )
+        self.return_result = True
 
         return self
 
@@ -846,32 +875,6 @@ class FFRenderTasks(FFCreateRender):
                     input_file, output_dir / f"0_{input_file.name}"
                 ),
             }
-
-        return self
-
-    def get_motion_segs(
-        self,
-        input_file: Path | str,
-        sampling_duration: float = DEFAULTS.sampling_duration.value,
-        input_kwargs: FFKwargs | None = None,
-        output_kwargs: FFKwargs | None = None,
-    ) -> FFCreateRender:
-        self.task_descripton = f"{_TASKS.GET_MOTION_SEGS}"
-        self.input_file = input_file = Path(input_file)
-        self.output_file = Path()
-        if input_kwargs is not None:
-            self.input_kwargs = input_kwargs
-        frame_per_second: str = FPRenderTasks().frame_per_s(input_file).render()
-        self.output_kwargs = (
-            {
-                "vf": f"select='not(mod(n,floor({frame_per_second})*{sampling_duration}))*gte(scene,0)',metadata=print",
-                "an": "",
-                "loglevel": "info",
-                "f": "null",
-            }
-            | ({} if output_kwargs is None else output_kwargs)
-            | {"": ""}
-        )
 
         return self
 
@@ -1588,6 +1591,7 @@ def cut_motionless(
     seg_min_duration: float = DEFAULTS.seg_min_duration.value,
     even_further: FurtherMethod = "remove",  # For other segments, remove means remove, None means copy
     odd_further: FurtherMethod = None,  # For segments, remove means remove, None means copy
+    delete_after: bool = False,
 ) -> Path | ERROR_CODE:
     if sampling_duration <= 0:
         logger.error("Duration must be greater than 0.")
@@ -1643,9 +1647,10 @@ def cut_motionless(
             video_segments=adjusted_segments,
             even_further=even_further,
             odd_further=odd_further,
+            delete_after=delete_after,
         )
         temp_output_file.replace(output_file)
-        return Path
+        return output_file
 
     except Exception as e:
         logger.error(f"Failed to {task_descripton} for {input_file}. Error: {e}")
@@ -1773,15 +1778,14 @@ def _partial_render_task(
 class PARTIAL_TASKS(FunctionEnum):
     @staticmethod
     def speedup(
-        multiple: float | int = 2,
+        multiple: float | int = DEFAULTS.speedup_multiple.value,
         input_kwargs: FFKwargs | None = None,
         output_kwargs: FFKwargs | None = None,
         delete_after: bool = False,
-        return_output: bool = False,
     ):
         return _partial_render_task(
             task=FFRenderTasks(
-                delete_after=delete_after, return_output=return_output
+                delete_after=delete_after,
             ).speedup,
             multiple=multiple,
             input_kwargs=input_kwargs,
@@ -1797,11 +1801,10 @@ class PARTIAL_TASKS(FunctionEnum):
         input_kwargs: FFKwargs | None = None,
         output_kwargs: FFKwargs | None = None,
         delete_after: bool = False,
-        return_output: bool = False,
     ):
         return _partial_render_task(
             task=FFRenderTasks(
-                delete_after=delete_after, return_output=return_output
+                delete_after=delete_after,
             ).jumpcut,
             b1_duration=b1_duration,
             b2_duration=b2_duration,
@@ -1816,11 +1819,10 @@ class PARTIAL_TASKS(FunctionEnum):
         input_kwargs: FFKwargs | None = None,
         output_kwargs: FFKwargs | None = None,
         delete_after: bool = False,
-        return_output: bool = False,
     ):
         return _partial_render_task(
             task=FFRenderTasks(
-                delete_after=delete_after, return_output=return_output
+                delete_after=delete_after,
             ).custom,
             input_kwargs=input_kwargs,
             output_kwargs=output_kwargs,
@@ -1834,11 +1836,10 @@ class PARTIAL_TASKS(FunctionEnum):
         input_kwargs: FFKwargs | None = None,
         output_kwargs: FFKwargs | None = None,
         delete_after: bool = False,
-        return_output: bool = False,
     ):
         return _partial_render_task(
             task=FFRenderTasks(
-                delete_after=delete_after, return_output=return_output
+                delete_after=delete_after,
             ).cut,
             ss=ss,
             to=to,
@@ -1854,11 +1855,10 @@ class PARTIAL_TASKS(FunctionEnum):
         input_kwargs: FFKwargs | None = None,
         output_kwargs: FFKwargs | None = None,
         delete_after: bool = False,
-        return_output: bool = False,
     ):
         return _partial_render_task(
             task=FFRenderTasks(
-                delete_after=delete_after, return_output=return_output
+                delete_after=delete_after,
             ).cut_silence_rerender,
             dB=dB,
             sampling_duration=sampling_duration,

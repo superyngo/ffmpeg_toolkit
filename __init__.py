@@ -9,7 +9,7 @@ from .ffmpeg_toolkit import (
     FFRenderTasks,
     DEFAULTS,
 )
-from . import types
+from . import ffmpeg_types as types
 
 PACKAGE_NAME = "ffmpeg_converter"
 
