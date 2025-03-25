@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from .ffmpeg_toolkit import (
+from .src.ffmpeg_toolkit import (
     PARTIAL_TASKS,
     cut_silence,
     cut_motionless,
@@ -9,7 +9,7 @@ from .ffmpeg_toolkit import (
     FFRenderTasks,
     DEFAULTS,
 )
-from . import ffmpeg_types as types
+from .src import ffmpeg_types as types
 
 PACKAGE_NAME = "ffmpeg_converter"
 

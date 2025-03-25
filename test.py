@@ -1,6 +1,6 @@
 import os
-import ffmpeg_toolkit
-from ffmpeg_toolkit import FPRenderTasks
+import src.ffmpeg_toolkit as ffmpeg_toolkit
+from src.ffmpeg_toolkit import FPRenderTasks
 from pathlib import Path
 from functools import partial
 from typing import Iterable, Sequence, Optional, Callable, Literal, Mapping, TypedDict
@@ -58,7 +58,11 @@ partition_config = ffmpeg_toolkit.PartitionConfig(
 # )
 
 
-ffmpeg_toolkit.partion_video(input_file, partition_config)
+ffmpeg_toolkit.partion_video(
+    input_file,
+    partition_config,
+    output_file=input_file.parent,
+)
 
 
 # code.interact(local=globals())

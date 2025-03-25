@@ -43,7 +43,7 @@ except ImportError:
 from pydantic import BaseModel, Field, field_validator
 
 # Local imports
-from ffmpeg_types import EncodeKwargs, VideoSuffix, FFKwargs, FunctionEnum
+from .ffmpeg_types import EncodeKwargs, VideoSuffix, FFKwargs, FunctionEnum
 # import ffmpeg
 
 
@@ -511,12 +511,27 @@ class FFCreateCommand(BaseModel):
     output_kwargs: FFKwargs = Field(default_factory=dict)
 
 
+class OptionFFRender(TypedDict):
+    task_descripton: NotRequired[str]
+    delete_after: NotRequired[bool]
+    exception: NotRequired[FFRenderException]
+    psot_task: NotRequired[Callable[..., Any]]
+    return_result: NotRequired[bool]
+
+
 class FFCreateRender(FFCreateCommand):
     task_descripton: str = "render"
     delete_after: bool = False
     exception: Optional[FFRenderException] = None
     post_task: Optional[Callable[..., Any]] = None
     return_result: bool = False
+
+    def override_option(self, options: OptionFFRender | None = None):
+        if options is not None:
+            for k, v in options.items():
+                setattr(self, k, v)
+
+        return self
 
     def render(self) -> Any:
         _shadow = copy.copy(self)
@@ -571,7 +586,7 @@ class FFCreateRender(FFCreateCommand):
             ):
                 temp_output_file.replace(_shadow.output_file)
 
-            if self.delete_after:
+            if _shadow.delete_after:
                 os.remove(_shadow.input_file)
 
             # Do post task if exists
@@ -1759,20 +1774,37 @@ def _create_cut_motionless_kwargs(
 
 
 def _partial_render_task(
-    task: MethodType | FunctionType | Callable, **config
+    task: MethodType | FunctionType | Callable,
+    **config,
 ) -> FurtherRenderTask:
     if "FFRenderTasks" in task.__qualname__:
 
-        def _partial(input_file: str | Path, output_file: str | Path) -> Any:
-            return task(
-                input_file=input_file, output_file=output_file, **config
-            ).render()
+        def _partial1(
+            input_file: str | Path,
+            output_file: str | Path,
+            options: OptionFFRender | None = None,
+        ) -> Any:
+            return (
+                task(input_file=input_file, output_file=output_file, **config)
+                .override_option(options=options)
+                .render()
+            )
+
+        return _partial1
     else:
 
-        def _partial(input_file: str | Path, output_file: str | Path) -> Any:
-            return task(input_file=input_file, output_file=output_file, **config)
+        def _partial2(
+            input_file: str | Path,
+            output_file: str | Path,
+            options: OptionFFRender | None = None,
+        ) -> Any:
+            if options is None:
+                options = {}
+            return task(
+                input_file=input_file, output_file=output_file, **(config | options)
+            )
 
-    return _partial
+        return _partial2
 
 
 class PARTIAL_TASKS(FunctionEnum):
@@ -1781,12 +1813,9 @@ class PARTIAL_TASKS(FunctionEnum):
         multiple: float | int = DEFAULTS.speedup_multiple.value,
         input_kwargs: FFKwargs | None = None,
         output_kwargs: FFKwargs | None = None,
-        delete_after: bool = False,
     ):
         return _partial_render_task(
-            task=FFRenderTasks(
-                delete_after=delete_after,
-            ).speedup,
+            task=FFRenderTasks().speedup,
             multiple=multiple,
             input_kwargs=input_kwargs,
             output_kwargs=output_kwargs,
@@ -1800,12 +1829,9 @@ class PARTIAL_TASKS(FunctionEnum):
         b2_multiple: float = 0,  # 0 means remove this part
         input_kwargs: FFKwargs | None = None,
         output_kwargs: FFKwargs | None = None,
-        delete_after: bool = False,
     ):
         return _partial_render_task(
-            task=FFRenderTasks(
-                delete_after=delete_after,
-            ).jumpcut,
+            task=FFRenderTasks().jumpcut,
             b1_duration=b1_duration,
             b2_duration=b2_duration,
             b1_multiple=b1_multiple,
@@ -1818,12 +1844,9 @@ class PARTIAL_TASKS(FunctionEnum):
     def custom(
         input_kwargs: FFKwargs | None = None,
         output_kwargs: FFKwargs | None = None,
-        delete_after: bool = False,
     ):
         return _partial_render_task(
-            task=FFRenderTasks(
-                delete_after=delete_after,
-            ).custom,
+            task=FFRenderTasks().custom,
             input_kwargs=input_kwargs,
             output_kwargs=output_kwargs,
         )
@@ -1835,12 +1858,9 @@ class PARTIAL_TASKS(FunctionEnum):
         rerender: bool = False,
         input_kwargs: FFKwargs | None = None,
         output_kwargs: FFKwargs | None = None,
-        delete_after: bool = False,
     ):
         return _partial_render_task(
-            task=FFRenderTasks(
-                delete_after=delete_after,
-            ).cut,
+            task=FFRenderTasks().cut,
             ss=ss,
             to=to,
             rerender=rerender,
@@ -1854,12 +1874,9 @@ class PARTIAL_TASKS(FunctionEnum):
         sampling_duration: float = DEFAULTS.sampling_duration.value,
         input_kwargs: FFKwargs | None = None,
         output_kwargs: FFKwargs | None = None,
-        delete_after: bool = False,
     ):
         return _partial_render_task(
-            task=FFRenderTasks(
-                delete_after=delete_after,
-            ).cut_silence_rerender,
+            task=FFRenderTasks().cut_silence_rerender,
             dB=dB,
             sampling_duration=sampling_duration,
             input_kwargs=input_kwargs,
@@ -1873,7 +1890,6 @@ class PARTIAL_TASKS(FunctionEnum):
         seg_min_duration: float = DEFAULTS.seg_min_duration.value,
         even_further: FurtherMethod = "remove",  # For other segments, remove means remove, None means copy
         odd_further: FurtherMethod = None,
-        delete_after: bool = False,
     ):  # For segments, remove means remove, None means copy
         return _partial_render_task(
             task=cut_silence,
@@ -1882,7 +1898,6 @@ class PARTIAL_TASKS(FunctionEnum):
             seg_min_duration=seg_min_duration,
             even_further=even_further,
             odd_further=odd_further,
-            delete_after=delete_after,
         )
 
     @staticmethod
@@ -1892,7 +1907,6 @@ class PARTIAL_TASKS(FunctionEnum):
         seg_min_duration: float = DEFAULTS.seg_min_duration.value,
         even_further: FurtherMethod = "remove",  # For other segments, remove means remove, None means copy
         odd_further: FurtherMethod = None,  # For segments, remove means remove, None means copy
-        delete_after: bool = False,
     ):
         return _partial_render_task(
             task=cut_motionless,
@@ -1901,7 +1915,6 @@ class PARTIAL_TASKS(FunctionEnum):
             seg_min_duration=seg_min_duration,
             even_further=even_further,
             odd_further=odd_further,
-            delete_after=delete_after,
         )
 
     @staticmethod
@@ -1909,14 +1922,12 @@ class PARTIAL_TASKS(FunctionEnum):
         partition_config: Optional[PartitionConfig] = None,
         output_dir: Optional[Path | str] = None,
         output_file: Path | str | None = None,
-        delete_after: bool = False,
     ):
         return _partial_render_task(
             task=partion_video,
             partition_config=partition_config,
             output_dir=output_dir,
             output_file=output_file,
-            delete_after=delete_after,
         )
 
 
