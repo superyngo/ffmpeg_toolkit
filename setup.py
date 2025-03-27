@@ -6,7 +6,7 @@ setup(
     author="Wenyang Tai",
     author_email="superyngo@gmail.com",
     description="A toolkit for working with FFmpeg",
-    long_description=open("README.md").read(),
+    long_description=open("README.MD").read(),
     long_description_content_type="text/markdown",
     url="https://github.com/superyngo/ffmpeg_toolkit",
     packages=find_packages(where="src", exclude=["bin", "bin.*"]),
