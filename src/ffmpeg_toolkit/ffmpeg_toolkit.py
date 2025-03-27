@@ -224,7 +224,7 @@ def _ffprobe(**ffkwargs):
         result = subprocess.run(
             command, capture_output=True, text=True, check=True, encoding="utf-8"
         )
-        return result.stdout.strip() + result.stderr.strip()
+        return result
     except subprocess.CalledProcessError as e:
         logger.error(f"Failed to execute ffprobe. Error: {e}")
         raise e
