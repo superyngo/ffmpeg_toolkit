@@ -1923,11 +1923,9 @@ class PARTIAL_TASKS(FunctionEnum):
     def partion_video(
         partition_config: Optional[PartitionConfig] = None,
         output_dir: Optional[Path | str] = None,
-        output_file: Path | str | None = None,
     ):
         return _partial_render_task(
             task=partion_video,
             partition_config=partition_config,
             output_dir=output_dir,
-            output_file=output_file,
         )
