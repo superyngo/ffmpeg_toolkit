@@ -300,13 +300,14 @@ class FPCreateRender(FPCreateCommand):
         )
 
         try:
-            result: str = _ffprobe(**ff_kwargs)
+            result: subprocess.CompletedProcess[str] = _ffprobe(**ff_kwargs)
+            stripped_result: str = result.stdout.strip() + result.stderr.strip()
 
             # Return post task if exists
             if _shadow.post_task is not None:
-                return _shadow.post_task(result)
+                return _shadow.post_task(stripped_result)
 
-            return result
+            return stripped_result
         except Exception as e:
             logger.error(
                 f"Failed to do {_shadow.task_descripton} videos for {_shadow.input_file}. Error: {e}"
