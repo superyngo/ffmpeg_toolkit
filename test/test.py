@@ -40,16 +40,6 @@ jumpcut_args = {
 #     "odd_further": ffmpeg_toolkit.PARTIAL_TASKS.custom(),
 # # }
 # # # # ffmpeg_toolkit.cut_motionless(**cut_motionless_config)
-
-partition_config = ffmpeg_toolkit.PartitionConfig(
-    portion_method=[
-        (1, ffmpeg_toolkit.PARTIAL_TASKS.custom()),
-        (1, ffmpeg_toolkit.PARTIAL_TASKS.jumpcut(**jumpcut_args)),
-        (1, ffmpeg_toolkit.PARTIAL_TASKS.cut_silence()),
-        (1, ffmpeg_toolkit.PARTIAL_TASKS.cut_motionless()),
-        (1, ffmpeg_toolkit.PARTIAL_TASKS.speedup(multiple=2)),
-    ]
-)
 # ffmpeg_toolkit.cut_silence(
 #     input_file,
 #     odd_further=ffmpeg_toolkit.PARTIAL_TASKS.speedup(),
@@ -57,9 +47,8 @@ partition_config = ffmpeg_toolkit.PartitionConfig(
 # )
 
 
-ffmpeg_toolkit.partion_video(
-    input_file,
-    partition_config,
+ffmpeg_toolkit.PartitionVideo(
+    input_file=input_file,
     output_file=input_file.parent,
 )
 
