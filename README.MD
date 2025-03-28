@@ -4,3 +4,5 @@ This project offers tools to enhance your experience with FFmpeg. It includes sc
 
 
 install:pip install ffmpeg-toolkit
+PyPi Page[https://pypi.org/project/ffmpeg-toolkit/#description]
+Github [https://github.com/superyngo/ffmpeg_toolkit]

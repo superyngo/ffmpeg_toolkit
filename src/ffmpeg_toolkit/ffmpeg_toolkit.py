@@ -714,7 +714,7 @@ class CutMotionlessRerender(FFCreateTask):
         def post_task(_result) -> Path:
             os.remove(str(self.output_kwargs["filter_script:v"]))
             os.remove(str(self.output_kwargs["filter_script:a"]))
-            return self.output_file
+            return self.output_file  # type: ignore
 
         self.post_task = post_task
 
@@ -752,7 +752,8 @@ class SplitSegments(FFCreateTask):
                 "code": 9,
                 "message": f"No video segments provided, just copy {self.input_file} to {self.output_dir}",
                 "hook": lambda: shutil.copy2(
-                    self.input_file, self.output_dir / f"0_{self.input_file.name}"
+                    self.input_file,
+                    self.output_dir / f"0_{self.input_file.name}",  # type: ignore
                 ),
             }
 
@@ -811,7 +812,7 @@ class KeepOrRemove(FFCreateTask):
         )
 
     @timing
-    def render(self) -> Path | ERROR_CODE:
+    def render(self) -> Path | ERROR_CODE:  # type: ignore
         logger.info(
             f"{self.task_descripton.capitalize()} {self.input_file} to {self.output_file} with {self.even_further = }, {self.odd_further = }."
         )
@@ -835,7 +836,7 @@ class KeepOrRemove(FFCreateTask):
             ).render()
 
             video_files: list[Path] = sorted(
-                temp_dir.glob(f"*{self.input_file.suffix}"),
+                temp_dir.glob(f"*{self.input_file.suffix}"),  # type: ignore
                 key=lambda video_file: int(video_file.stem.split("_")[0]),
             )
 
@@ -875,7 +876,7 @@ class KeepOrRemove(FFCreateTask):
 
             # Merge the kept segments
             rendered_video_files: list[Path] = sorted(
-                temp_dir.glob(f"*{self.input_file.suffix}"),
+                temp_dir.glob(f"*{self.input_file.suffix}"),  # type: ignore
                 key=lambda video_file: int(video_file.stem.split("_")[0]),
             )
             Merge(
@@ -888,7 +889,7 @@ class KeepOrRemove(FFCreateTask):
                     os.remove(video)
                 os.rmdir(temp_dir)
 
-            return self.output_file
+            return self.output_file  # type: ignore
 
         except Exception as e:
             logger.error(
@@ -910,7 +911,9 @@ type PortionMethod = (
 
 
 class PartitionVideo(FFCreateTask):
-    count: int = Field(default=0, gte=0)  # Easy way to create portion_method
+    count: int = Field(
+        default=0, gte=0
+    )  # Easy way to create portion_method # type: ignore
     portion_method: PortionMethod | None = None  # Main logic for partitioning
     output_dir: Path | str | None = None
 
@@ -932,7 +935,7 @@ class PartitionVideo(FFCreateTask):
         if self.count == 0 and self.portion_method is not None:
             self.count = sum(p[0] for p in self.portion_method)  # type: ignore
         if self.portion_method is None:
-            self.portion_method = [(1, None)] * self.count
+            self.portion_method = [(1, None)] * self.count  # type: ignore
 
     @field_validator("portion_method")
     @classmethod
@@ -942,7 +945,7 @@ class PartitionVideo(FFCreateTask):
             _portion_method: PortionMethod = [
                 (p, None) if isinstance(p, int) else p for p in portion_method
             ]
-            _sum = sum(p[0] for p in _portion_method)
+            _sum = sum(p[0] for p in _portion_method)  # type: ignore
             logger.info(f"{info=}")
             logger.info(f"{info.data=}")
             _count = info.data["count"]
@@ -953,15 +956,15 @@ class PartitionVideo(FFCreateTask):
             return _portion_method
 
     @timing
-    def render(self) -> Path | ERROR_CODE | int:
+    def render(self) -> Path | ERROR_CODE | int:  # type: ignore
         duration: float = FPRenderTasks().duration(self.input_file).render()
         video_segments: list[str] = _get_segments_from_parts_count(
             duration,
             self.count,
-            [p[0] for p in self.portion_method],
+            [p[0] for p in self.portion_method],  # type: ignore
         )
         logger.info(
-            f"{self.task_descripton.capitalize()} {self.input_file.name} to {self.output_dir} with {self.portion_method}."
+            f"{self.task_descripton.capitalize()} {self.input_file.name} to {self.output_dir} with {self.portion_method}."  # type: ignore
         )
 
         try:
