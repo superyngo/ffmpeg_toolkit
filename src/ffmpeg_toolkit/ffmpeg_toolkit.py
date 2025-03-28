@@ -127,6 +127,7 @@ def _create_ff_kwargs(
     output_file: Path,
     input_kwargs: FFKwargs,
     output_kwargs: FFKwargs,
+    **_,
 ) -> FFKwargs:
     input_kwargs_default: FFKwargs = {
         "hide_banner": "",
@@ -136,10 +137,7 @@ def _create_ff_kwargs(
 
     input_file_kwargs: Mapping[Literal["i"], Path] = {"i": input_file}
     # Handle file path
-    if output_file == Path():
-        output_file_kwargs: Mapping[Literal["y"], Path] = {}
-    else:
-        output_file_kwargs = {"y": output_file}
+    output_file_kwargs = {"y": output_file}
     ff_kwargs: FFKwargs = (
         input_kwargs_default
         | input_kwargs
@@ -233,27 +231,30 @@ def _ffprobe(**ffkwargs):
 def _handle_output_file_path(
     input_file: Path, output_file: Path | str | None, task_description: str
 ) -> Path:
+    # Handle None
     if output_file is None:
-        output_file = (
+        return (
             input_file.parent
             / f"{input_file.stem}_{task_description}{input_file.suffix if input_file.suffix in VideoSuffix else '.' + VideoSuffix.MKV}"
         )
-    else:
-        output_file = Path(output_file)
-        if output_file == Path():
-            # Using empty path - let FFmpeg handle output (might be for probe operations)
-            pass
-        elif output_file.suffix == "" and output_file.is_file():
-            # Path exists but isn't a directory - this is an error
-            raise ValueError(f"{output_file} exists and is not a directory")
-        elif output_file.suffix == "":
-            # It's a directory (or should be treated as one)
-            # Create directory if needed and build output filename inside it
-            output_file.mkdir(exist_ok=True)
-            output_file = (
-                output_file
-                / f"{input_file.stem}_{task_description}{input_file.suffix if input_file.suffix in VideoSuffix else '.' + VideoSuffix.MKV}"
-            )
+
+    output_file = Path(output_file)
+
+    # Handle "-"
+    if output_file == Path("-"):
+        return output_file
+
+    # Handle file existed error
+    if output_file.suffix == "" and output_file.is_file():
+        raise ValueError(f"{output_file} exists and is not a directory")
+
+    # Handle directory
+    if output_file.suffix == "":
+        output_file.mkdir(exist_ok=True)
+        output_file = (
+            output_file
+            / f"{input_file.stem}_{task_description}{input_file.suffix if input_file.suffix in VideoSuffix else '.' + VideoSuffix.MKV}"
+        )
     return output_file
 
 
@@ -263,6 +264,7 @@ class FFRenderException(TypedDict):
     hook: NotRequired[Callable[[], Any]]
 
 
+# FFProbe taks
 class FPCreateCommand(BaseModel):
     input_file: Path | str = Path()
     input_kwargs: FFKwargs = Field(default_factory=dict)
@@ -506,9 +508,10 @@ class FPRenderTasks(FPCreateRender):
         return self
 
 
+# FFMpeg taks base
 class FFCreateCommand(BaseModel):
     input_file: Path | str = Path()
-    output_file: Optional[Path | str] = None
+    output_file: Path | str | None = None
     input_kwargs: FFKwargs = Field(default_factory=dict)
     output_kwargs: FFKwargs = Field(default_factory=dict)
 
@@ -521,11 +524,11 @@ class OptionFFRender(TypedDict):
     return_result: NotRequired[bool]
 
 
-class FFCreateRender(FFCreateCommand):
+class FFCreateTask(FFCreateCommand):
     task_descripton: str = "render"
     delete_after: bool = False
-    exception: Optional[FFRenderException] = None
-    post_task: Optional[Callable[..., Any]] = None
+    exception: FFRenderException | None = None
+    post_task: Callable[..., Any] | None = None
     return_result: bool = False
 
     def override_option(self, options: OptionFFRender | None = None) -> Self:
@@ -537,18 +540,17 @@ class FFCreateRender(FFCreateCommand):
 
     def render(self) -> Any:
         _shadow = copy.copy(self)
-        _shadow.input_file = Path(_shadow.input_file)
 
-        # Handle output file path
+        # Handle inout and output file path
+        _shadow.input_file = Path(_shadow.input_file)
         _shadow.output_file = _handle_output_file_path(
             _shadow.input_file, _shadow.output_file, _shadow.task_descripton
         )
-
         # Handle temp output file path
-        if _shadow.output_file == Path() or r"%d" in str(_shadow.output_file):
-            temp_output_file: Path = _shadow.output_file
+        if _shadow.output_file == Path("-") or r"%d" in str(_shadow.output_file):
+            temp_output_file: Path | Literal["-"] = _shadow.output_file
         else:
-            temp_output_file: Path = _shadow.output_file.parent / (
+            temp_output_file = _shadow.output_file.parent / (
                 _shadow.output_file.stem + "_processing" + _shadow.output_file.suffix
             )
 
@@ -563,19 +565,9 @@ class FFCreateRender(FFCreateCommand):
                 return exception_hook()
             return _shadow.exception["code"]
 
-        # Generate ff kwargs in
-        unwated_key: list[str] = [
-            "task_descripton",
-            "exception",
-            "post_task",
-            "output_file",
-            "delete_after",
-            "return_result",
-        ]
-        fp_command = {
-            k: v for k, v in _shadow.model_dump().items() if k not in unwated_key
-        } | {"output_file": temp_output_file}
-        ff_kwargs: FFKwargs = _create_ff_kwargs(**fp_command)
+        ff_kwargs: FFKwargs = _create_ff_kwargs(
+            **(_shadow.model_dump() | {"output_file": temp_output_file})
+        )
 
         logger.info(
             f"{_shadow.task_descripton.capitalize()} {_shadow.input_file.name} to {_shadow.output_file.name} with {ff_kwargs}"
@@ -606,139 +598,83 @@ class FFCreateRender(FFCreateCommand):
             raise e
 
 
-class FFRenderTasks(FFCreateRender):
-    def custom(
-        self,
-        input_file: Path | str,
-        output_file: Optional[Path | str] = None,
-        input_kwargs: FFKwargs | None = None,
-        output_kwargs: FFKwargs | None = None,
-    ) -> Self:
-        self.input_file = input_file
-        self.output_file = output_file
-        if input_kwargs is not None:
-            self.input_kwargs = input_kwargs
-        if output_kwargs is not None:
-            self.output_kwargs = output_kwargs
-        return self
+# Specific FFMpeg tasks implement
+class Custom(FFCreateTask):
+    pass
 
-    def cut(
-        self,
-        input_file: Path | str,
-        output_file: Optional[Path | str] = None,
-        ss: str = "00:00:00",
-        to: str = "00:00:01",
-        rerender: bool = False,
-        input_kwargs: FFKwargs | None = None,
-        output_kwargs: FFKwargs | None = None,
-    ) -> Self:
-        self.task_descripton = f"{_TASKS.CUT}_{_convert_timestamp_to_seconds(ss)}-{_convert_timestamp_to_seconds(to)}"
-        self.input_file = input_file
-        self.output_file = output_file
-        if input_kwargs is not None:
-            self.input_kwargs = input_kwargs
-        self.output_kwargs = (
-            {
-                "ss": ss,
-                "to": to,
+
+class Cut(FFCreateTask):
+    ss: str = "00:00:00"
+    to: str = "00:00:01"
+    rerender: bool = False
+
+    def model_post_init(self, *args, **kwargs) -> None:
+        _defalut_output_kwargs: FFKwargs = {
+            "ss": self.ss,
+            "to": self.to,
+        } | ({} if self.rerender else {"c:v": "copy", "c:a": "copy"})
+        self.task_descripton = f"{_TASKS.CUT}_{_convert_timestamp_to_seconds(self.ss)}-{_convert_timestamp_to_seconds(self.to)}"
+        self.output_kwargs = _defalut_output_kwargs | self.output_kwargs
+
+
+class Speedup(FFCreateTask):
+    multiple: float | int = DEFAULTS.speedup_multiple.value
+
+    def model_post_init(self, *args, **kwargs):
+        self.task_descripton = f"{_TASKS.SPEEDUP}_by_{self.multiple}"
+        if self.multiple == 1 and self.input_file != self.output_file:
+            self.exception = {
+                "code": 0,
+                "message": "Speedup multiple 1, only replace target file",
             }
-            | ({} if rerender else {"c:v": "copy", "c:a": "copy"})
-            | ({} if output_kwargs is None else output_kwargs)
-        )
-        return self
-
-    def speedup(
-        self,
-        input_file: Path | str,
-        output_file: Optional[Path | str] = None,
-        multiple: float | int = DEFAULTS.speedup_multiple.value,
-        input_kwargs: FFKwargs | None = None,
-        output_kwargs: FFKwargs | None = None,
-    ) -> Self:
-        self.task_descripton = f"{_TASKS.SPEEDUP}_by_{multiple}"
-        self.input_file = input_file
-        self.output_file = output_file
-        if input_kwargs is not None:
-            self.input_kwargs = input_kwargs
-        self.output_kwargs = _create_speedup_kwargs(multiple) | (
-            {} if output_kwargs is None else output_kwargs
-        )
-
-        # error handling
-        if multiple == 1:
-            if input_file != output_file:
-                self.exception = {
-                    "code": 0,
-                    "message": "Speedup multiple 1, only replace target file",
-                }
-
-        if multiple <= 0:
+        if self.multiple <= 0:
             self.exception = {
                 "code": 1,
                 "message": "Speedup factor must be greater than 0.",
             }
+        self.output_kwargs = _create_speedup_kwargs(self.multiple) | self.output_kwargs
 
-        return self
 
-    def jumpcut(
-        self,
-        input_file: Path | str,
-        output_file: Path | None = None,
-        b1_duration: float = 5,
-        b2_duration: float = 5,
-        b1_multiple: float = 1,  # 0 means remove this part
-        b2_multiple: float = 0,  # 0 means remove this part
-        input_kwargs: FFKwargs | None = None,
-        output_kwargs: FFKwargs | None = None,
-    ) -> Self:
-        self.task_descripton = f"{_TASKS.JUMPCUT}_b1({b1_duration}x{b1_multiple})_b2({b2_duration}x{b2_multiple})"
-        self.input_file = input_file
-        self.output_file = output_file
-        if input_kwargs is not None:
-            self.input_kwargs = input_kwargs
-        self.output_kwargs = _create_jumpcut_kwargs(
-            b1_duration, b2_duration, b1_multiple, b2_multiple
-        ) | ({} if output_kwargs is None else output_kwargs)
+class Jumpcut(FFCreateTask):
+    b1_duration: float = 5
+    b2_duration: float = 5
+    b1_multiple: float = 1
+    b2_multiple: float = 0
 
-        # error handling
-        if any((b1_duration <= 0, b2_duration <= 0)):
+    def model_post_init(self, *args, **kwargs):
+        self.task_descripton = f"{_TASKS.JUMPCUT}_b1({self.b1_duration}x{self.b1_multiple})_b2({self.b2_duration}x{self.b2_multiple})"
+        if any((self.b1_duration <= 0, self.b2_duration <= 0)):
             self.exception = {
                 "code": 1,
                 "message": "Both parts' durations must be greater than 0.",
             }
-
-        if any((b1_multiple < 0, b2_multiple < 0)):
+        if any((self.b1_multiple < 0, self.b2_multiple < 0)):
             self.exception = {
                 "code": 2,
                 "message": "Both multiples must be greater or equal to 0 (0 means remove).",
             }
+        self.output_kwargs = (
+            _create_jumpcut_kwargs(
+                self.b1_duration, self.b2_duration, self.b1_multiple, self.b2_multiple
+            )
+            | self.output_kwargs
+        )
 
-        return self
 
-    def merge(
-        self,
-        input_dir_or_files: Path | str | list[Path] | list[str],
-        output_file: Path | None = None,
-        input_kwargs: FFKwargs | None = None,
-        output_kwargs: FFKwargs | None = None,
-    ) -> Self:
-        # Create input.txt
-        if isinstance(input_dir_or_files, Iterable):
-            input_dir_or_files = [Path(video) for video in input_dir_or_files]
-        else:
-            input_dir_or_files = Path(input_dir_or_files)
-        input_txt: Path = create_merge_txt(input_dir_or_files)
+class Merge(FFCreateTask):
+    input_dir_or_files: Path | str | list[Path] | list[str]
+
+    def model_post_init(self, *args, **kwargs):
+        self.input_dir_or_files = (
+            [Path(p) for p in self.input_dir_or_files]
+            if isinstance(self.input_dir_or_files, list)
+            else Path(self.input_dir_or_files)
+        )
+        input_txt: Path = create_merge_txt(self.input_dir_or_files)
         self.task_descripton = _TASKS.MERGE
         self.input_file = input_txt
-        self.output_file = output_file
-        self.input_kwargs = {
-            "f": "concat",
-            "safe": 0,
-        } | ({} if input_kwargs is None else input_kwargs)
-        self.output_kwargs = {
-            "c:a": "copy",
-            "c:v": "copy",
-        } | ({} if output_kwargs is None else output_kwargs)
+        self.input_kwargs = {"f": "concat", "safe": 0} | self.input_kwargs
+        self.output_kwargs = {"c:a": "copy", "c:v": "copy"} | self.output_kwargs
 
         def post_task(_result):
             os.remove(input_txt)
@@ -748,155 +684,532 @@ class FFRenderTasks(FFCreateRender):
 
         self.post_task = post_task
 
-        return self
 
-    def get_silence_segs(
-        self,
-        input_file: Path | str,
-        dB: int = DEFAULTS.db_threshold.value,
-        sampling_duration: float = DEFAULTS.sampling_duration.value,
-        input_kwargs: FFKwargs | None = None,
-        output_kwargs: FFKwargs | None = None,
-    ) -> Self:
-        self.task_descripton = f"{_TASKS.GET_NON_SILENCE_SEGS}_by_{dB}"
-        self.input_file = input_file
-        self.output_file = Path()
-        if input_kwargs is not None:
-            self.input_kwargs = input_kwargs
+class CutSilenceRerender(FFCreateTask):
+    dB: int = DEFAULTS.db_threshold.value
+    sampling_duration: float = DEFAULTS.sampling_duration.value
+
+    def model_post_init(self, *args, **kwargs):
+        self.task_descripton = f"{_TASKS.CUT_SILENCE_RERENDER}_by_{self.dB}"
         self.output_kwargs = (
-            {
-                "af": f"silencedetect=n={dB}dB:d={sampling_duration}",
-                "vn": "",
-                "loglevel": "info",
-                "f": "null",
-            }
-            | ({} if output_kwargs is None else output_kwargs)
-            | {"": ""}
+            _create_cut_sl_kwargs(self.input_file, self.dB, self.sampling_duration)
+            | self.output_kwargs
         )
-        self.return_result = True
-
-        return self
-
-    def get_motion_segs(
-        self,
-        input_file: Path | str,
-        sampling_duration: float = DEFAULTS.sampling_duration.value,
-        input_kwargs: FFKwargs | None = None,
-        output_kwargs: FFKwargs | None = None,
-    ) -> Self:
-        self.task_descripton = f"{_TASKS.GET_MOTION_SEGS}"
-        self.input_file = input_file = Path(input_file)
-        self.output_file = Path()
-        if input_kwargs is not None:
-            self.input_kwargs = input_kwargs
-        frame_per_second: str = FPRenderTasks().frame_per_s(input_file).render()
-        self.output_kwargs = (
-            {
-                "vf": f"select='not(mod(n,floor({frame_per_second})*{sampling_duration}))*gte(scene,0)',metadata=print",
-                "an": "",
-                "loglevel": "info",
-                "f": "null",
-            }
-            | ({} if output_kwargs is None else output_kwargs)
-            | {"": ""}
-        )
-        self.return_result = True
-
-        return self
-
-    def cut_silence_rerender(
-        self,
-        input_file: Path | str,
-        output_file: Path | str | None = None,
-        dB: int = DEFAULTS.db_threshold.value,
-        sampling_duration: float = DEFAULTS.sampling_duration.value,
-        input_kwargs: FFKwargs | None = None,
-        output_kwargs: FFKwargs | None = None,
-    ) -> Self:
-        self.task_descripton = f"{_TASKS.CUT_SILENCE_RERENDER}_by_{dB}"
-        self.input_file = input_file
-        self.output_file = output_file
-        if input_kwargs is not None:
-            self.input_kwargs = input_kwargs
-        self.output_kwargs = output_kwargs = _create_cut_sl_kwargs(
-            input_file, dB, sampling_duration
-        ) | ({} if output_kwargs is None else output_kwargs)
 
         def post_task(_result):
-            os.remove(str(output_kwargs["filter_script:v"]))
-            os.remove(str(output_kwargs["filter_script:a"]))
+            os.remove(str(self.output_kwargs["filter_script:v"]))
+            os.remove(str(self.output_kwargs["filter_script:a"]))
 
         self.post_task = post_task
 
-        return self
 
-    def cut_motionless_rerender(
-        self,
-        input_file: Path | str,
-        output_file: Path | str | None = None,
-        threshold: float = DEFAULTS.motionless_threshold.value,
-        sampling_duration: float = DEFAULTS.sampling_duration.value,
-        input_kwargs: FFKwargs | None = None,
-        output_kwargs: FFKwargs | None = None,
-    ) -> Self:
-        self.task_descripton = f"{_TASKS.CUT_MOTIONLESS_RERENDER}_by_{threshold}"
-        self.input_file = input_file
-        self.output_file = output_file
-        if input_kwargs is not None:
-            self.input_kwargs = input_kwargs
-        self.output_kwargs = output_kwargs = _create_cut_motionless_kwargs(
-            input_file, threshold, sampling_duration
-        ) | ({} if output_kwargs is None else output_kwargs)
+class CutMotionlessRerender(FFCreateTask):
+    threshold: float = DEFAULTS.motionless_threshold.value
+    sampling_duration: float = DEFAULTS.sampling_duration.value
+
+    def model_post_init(self, *args, **kwargs):
+        self.task_descripton = f"{_TASKS.CUT_MOTIONLESS_RERENDER}_by_{self.threshold}"
+        self.output_kwargs = (
+            _create_cut_motionless_kwargs(
+                self.input_file, self.threshold, self.sampling_duration
+            )
+            | self.output_kwargs
+        )
 
         def post_task(_result):
-            os.remove(str(output_kwargs["filter_script:v"]))
-            os.remove(str(output_kwargs["filter_script:a"]))
+            os.remove(str(self.output_kwargs["filter_script:v"]))
+            os.remove(str(self.output_kwargs["filter_script:a"]))
 
         self.post_task = post_task
 
-        return self
 
-    def split_segments(
-        self,
-        input_file: Path | str,
-        video_segments: list[str],
-        output_dir: Optional[Path | str] = None,
-        input_kwargs: FFKwargs | None = None,
-        output_kwargs: FFKwargs | None = None,
-    ) -> Self:
-        self.task_descripton = f"{_TASKS.SPLIT}"
-        input_file = Path(input_file)
-        if output_dir is None:
-            output_dir = input_file.parent / f"{input_file.stem}_{self.task_descripton}"
+class SplitSegments(FFCreateTask):
+    video_segments: list[str]
+    output_dir: Optional[Path | str] = None
+
+    def model_post_init(self, *args, **kwargs):
+        self.task_descripton = _TASKS.SPLIT
+        input_file = Path(self.input_file)
+        if self.output_dir is None:
+            self.output_dir = (
+                input_file.parent / f"{input_file.stem}_{self.task_descripton}"
+            )
         else:
-            output_dir = Path(output_dir)
-        output_dir.mkdir(exist_ok=True)
-        self.input_file = input_file
-        self.output_file = f"{output_dir}/%d_{input_file.stem}{input_file.suffix}"
-        if input_kwargs is not None:
-            self.input_kwargs = input_kwargs
+            self.output_dir = Path(self.output_dir)
+        self.output_dir.mkdir(exist_ok=True)
+        self.output_file = f"{self.output_dir}/%d_{input_file.stem}{input_file.suffix}"
         self.output_kwargs = {
             "c:v": "copy",
             "c:a": "copy",
             "f": "segment",
-            "segment_times": ",".join(video_segments),
+            "segment_times": ",".join(self.video_segments),
             "segment_format": input_file.suffix.lstrip("."),
             "reset_timestamps": "1",
-        } | ({} if output_kwargs is None else output_kwargs)
+        } | self.output_kwargs
 
-        if len(video_segments) == 0:
+        if len(self.video_segments) == 0:
             self.exception = {
                 "code": 9,
-                "message": f"No video segments provided, just copy {input_file} to {output_dir}",
+                "message": f"No video segments provided, just copy {input_file} to {self.output_dir}",
                 "hook": lambda: shutil.copy2(
-                    input_file, output_dir / f"0_{input_file.name}"
+                    input_file, self.output_dir / f"0_{input_file.name}"
                 ),
             }
 
-        return self
+
+class _GetSilenceSegments(FFCreateTask):
+    dB: int = DEFAULTS.db_threshold.value
+    sampling_duration: float = DEFAULTS.sampling_duration.value
+
+    def model_post_init(self, *args, **kwargs):
+        self.task_descripton = f"{_TASKS.GET_NON_SILENCE_SEGS}_by_{self.dB}"
+        self.output_file = "-"
+        self.output_kwargs = {
+            "af": f"silencedetect=n={self.dB}dB:d={self.sampling_duration}",
+            "vn": "",
+            "loglevel": "info",
+            "f": "null",
+        } | self.output_kwargs
+        self.return_result = True
 
 
-# for fppedup
+class _GetMotionSegments(FFCreateTask):
+    sampling_duration: float = DEFAULTS.sampling_duration.value
+
+    def model_post_init(self, *args, **kwargs):
+        self.task_descripton = _TASKS.GET_MOTION_SEGS
+        frame_per_second: str = FPRenderTasks().frame_per_s(self.input_file).render()
+        self.output_file = "-"
+        self.output_kwargs = {
+            "vf": f"select='not(mod(n,floor({frame_per_second})*{self.sampling_duration}))*gte(scene,0)',metadata=print",
+            "an": "",
+            "loglevel": "info",
+            "f": "null",
+        } | self.output_kwargs
+        self.return_result = True
+
+
+# keep or remove copy/rendering by split segs
+class KeepOrRemove(FFCreateTask):
+    video_segments: list[str] | list[float]
+    even_further: FurtherMethod = (
+        "remove"  # For other segments, remove means remove, None means copy
+    )
+    odd_further: FurtherMethod = (
+        None  # For segments, remove means remove, None means copy
+    )
+    remove_temp_handle: bool = True
+
+    def model_post_init(self, *args, **kwargs):
+        self.task_descripton = _TASKS.KEEP_OR_REMOVE
+        # Handle input and output file path
+        self.input_file = Path(self.input_file)
+        self.output_file = _handle_output_file_path(
+            self.input_file, self.output_file, self.task_descripton
+        )
+
+    @timing
+    def render(self) -> Path | ERROR_CODE:
+        logger.info(
+            f"{self.task_descripton.capitalize()} {self.input_file} to {self.output_file} with {self.even_further = }, {self.odd_further = }."
+        )
+
+        # Convert video segments to timestamps if needed
+        video_segments = [
+            _convert_seconds_to_timestamp(s) if isinstance(s, (float, int)) else s
+            for s in self.video_segments
+        ]
+
+        try:
+            # Split videos
+            temp_dir: Path = Path(
+                tempfile.mkdtemp(prefix=DEFAULTS.temp_dir_prefix.value)
+            )
+            SplitSegments(
+                input_file=self.input_file,
+                video_segments=video_segments,
+                output_dir=temp_dir,
+                delete_after=self.delete_after,
+            ).render()
+
+            video_files: list[Path] = sorted(
+                temp_dir.glob(f"*{self.input_file.suffix}"),
+                key=lambda video_file: int(video_file.stem.split("_")[0]),
+            )
+
+            further_methods: dict[int, FurtherMethod] = {
+                0: self.even_further,
+                1: self.odd_further,
+            }
+
+            # Use ThreadPoolExecutor to manage rendering tasks
+            futures = []
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=DEFAULTS.num_cores.value
+            ) as executor:
+                for video in video_files:
+                    index = int(video.stem.split("_")[0])
+                    i_remainder = index % 2
+                    further_method: FurtherMethod = further_methods[i_remainder]
+
+                    # Remove unwanted segments
+                    if further_method == "remove":
+                        os.remove(video)
+                        continue
+
+                    # Skip further rendering if the segment is to be copied
+                    if further_method is None:
+                        continue
+
+                    # Submit the further render task to the executor
+                    future = executor.submit(
+                        further_method, input_file=video, output_file=video
+                    )
+                    futures.append(future)
+
+                # Wait for all submitted tasks to complete
+                for future in futures:
+                    future.result()  # This will raise exceptions if any occurred during task execution
+
+            # Merge the kept segments
+            rendered_video_files: list[Path] = sorted(
+                temp_dir.glob(f"*{self.input_file.suffix}"),
+                key=lambda video_file: int(video_file.stem.split("_")[0]),
+            )
+            Merge(
+                input_dir_or_files=rendered_video_files, output_file=self.output_file
+            ).render()
+
+            # Clean up temporary files and directory
+            if self.remove_temp_handle:
+                for video in temp_dir.iterdir():
+                    os.remove(video)
+                os.rmdir(temp_dir)
+
+            return self.output_file
+
+        except Exception as e:
+            logger.error(
+                f"Failed to {self.task_descripton} for {self.input_file}. Error: {e}"
+            )
+            raise e
+
+
+# Partitioning
+type PortionMethod = (
+    list[tuple[int, FurtherMethod]] | list[int] | list[tuple[int, None]]
+)
+
+
+class PartitionVideo(FFCreateTask):
+    count: int = Field(default=0, gte=0)  # Easy way to create portion_method
+    portion_method: PortionMethod | None = None  # Main logic for partitioning
+    output_dir: Path | str | None = None
+
+    def model_post_init(self, *args, **kwargs):
+        self.task_descripton = _TASKS.PARTITION
+        # Handle input and output file path
+        self.input_file = Path(self.input_file)
+        if self.output_dir is None:
+            self.output_dir = (
+                self.input_file.parent / f"{self.input_file.stem}_partition"
+            )
+        else:
+            self.output_dir = Path(self.output_dir)
+        self.output_dir.mkdir(exist_ok=True)
+
+        # Handle None portion_method with count
+        if self.count == 0 and self.portion_method is None:
+            self.count = 3
+        if self.count == 0 and self.portion_method is not None:
+            self.count = sum(p[0] for p in self.portion_method)  # type: ignore
+        if self.portion_method is None:
+            self.portion_method = [(1, None)] * self.count
+
+    @field_validator("portion_method")
+    @classmethod
+    def validate_portion_sum(cls, portion_method: PortionMethod, info) -> PortionMethod:
+        # Validate portion_method
+        if portion_method is not None:
+            _portion_method: PortionMethod = [
+                (p, None) if isinstance(p, int) else p for p in portion_method
+            ]
+            _sum = sum(p[0] for p in _portion_method)
+            logger.info(f"{info=}")
+            logger.info(f"{info.data=}")
+            _count = info.data["count"]
+            if _count != 0 and _sum != _count:
+                raise ValueError(
+                    f"Sum of portions ({_sum}) must equal to count ({_count})"
+                )
+            return _portion_method
+
+    @timing
+    def render(self) -> Path | ERROR_CODE | int:
+        _shadow = copy.copy(self)
+        duration: float = FPRenderTasks().duration(_shadow.input_file).render()
+        video_segments: list[str] = _get_segments_from_parts_count(
+            duration,
+            _shadow.count,
+            [p[0] for p in _shadow.portion_method],
+        )
+        logger.info(
+            f"{_shadow.task_descripton.capitalize()} {_shadow.input_file.name} to {_shadow.output_dir} with {_shadow.portion_method}."
+        )
+
+        try:
+            # Split videos
+            temp_dir: Path = Path(
+                tempfile.mkdtemp(prefix=DEFAULTS.temp_dir_prefix.value)
+            )
+            SplitSegments(
+                input_file=_shadow.input_file,
+                video_segments=video_segments,
+                output_dir=temp_dir,
+                delete_after=_shadow.delete_after,
+            ).render()
+
+            video_files: list[Path] = sorted(
+                temp_dir.glob(f"*{_shadow.input_file.suffix}"),
+                key=lambda video_file: int(video_file.stem.split("_")[0]),
+            )
+
+            # Further render videos
+            new_video_files: list[Path] = []
+            futures = []
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=DEFAULTS.num_cores.value
+            ) as executor:
+                for video in video_files:
+                    seg_output_file: Path = _shadow.output_dir / video.name
+                    index = int(video.stem.split("_")[0])
+                    further_method: FurtherMethod = _shadow.portion_method[index][1]
+
+                    if further_method == "remove":
+                        os.remove(video)
+                        continue
+
+                    # Move to output dir if no further rendering is needed
+                    if further_method is None:
+                        shutil.move(str(video), str(seg_output_file))
+                        new_video_files.append(seg_output_file)
+                        continue
+
+                    # Submit the task and store the future
+                    future = executor.submit(
+                        further_method, input_file=video, output_file=video
+                    )
+                    futures.append((future, video, seg_output_file))
+
+            # Wait for all submitted tasks to complete and then move files
+            for future, video, seg_output_file in futures:
+                future.result()  # This will raise exceptions if any occurred during task execution
+                shutil.move(str(video), str(seg_output_file))
+                new_video_files.append(seg_output_file)
+
+            # Sort the new video files
+            new_video_files = sorted(
+                new_video_files, key=lambda video: int(video.stem.split("_")[0])
+            )
+
+            os.rmdir(temp_dir)
+
+            if _shadow.output_file is not None:
+                _shadow.output_file = _handle_output_file_path(
+                    _shadow.input_file, _shadow.output_file, _shadow.task_descripton
+                )
+                Merge(
+                    input_dir_or_files=new_video_files,
+                    output_file=Path(_shadow.output_file),
+                ).render()  # type:ignore
+                return _shadow.output_file
+
+            return 0
+
+        except Exception as e:
+            logger.error(
+                f"Failed to {_shadow.task_descripton} for {_shadow.input_file}. Error: {e}"
+            )
+            raise e
+
+
+class CutSilence(FFCreateTask):
+    dB: int = DEFAULTS.db_threshold.value
+    sampling_duration: float = DEFAULTS.sampling_duration.value
+    seg_min_duration: float = DEFAULTS.seg_min_duration.value
+    even_further: FurtherMethod = (
+        "remove"  # For other segments, remove means remove, None means copy
+    )
+    odd_further: FurtherMethod = (
+        None  # For segments, remove means remove, None means copy
+    )
+
+    def model_post_init(self, *args, **kwargs):
+        self.task_descripton = f"{_TASKS.CUT_SILENCE}_by_{self.dB}"
+        # Handle input and output file path
+        self.input_file = Path(self.input_file)
+        self.output_file = _handle_output_file_path(
+            self.input_file, self.output_file, self.task_descripton
+        )
+
+    @timing
+    def render(self) -> Path | ERROR_CODE:
+        _shadow = copy.copy(self)
+        logger.info(
+            f"{_shadow.task_descripton.capitalize()} {_shadow.input_file} to {_shadow.output_file} with {_shadow.dB = }, {_shadow.sampling_duration = }, {_shadow.seg_min_duration = }."
+        )
+
+        # Extract non-silence segments
+        non_silence_str: str = str(
+            _GetSilenceSegments(
+                input_file=_shadow.input_file,
+                dB=_shadow.dB,
+                sampling_duration=_shadow.sampling_duration,
+            ).render()
+        )
+        non_silence_segments, total_duration, _ = _extract_non_silence_info(
+            non_silence_str
+        )
+        logger.info(f"{non_silence_segments = }")
+
+        # Extract keyframes
+        keyframes = FPRenderTasks().keyframes(_shadow.input_file).render()
+
+        # Adjust segments
+        adjusted_segments_config = AdjustSegmentsConfig(
+            segments=non_silence_segments,
+            seg_min_duration=_shadow.seg_min_duration,
+            total_duration=total_duration,
+            keyframes=keyframes,
+        )
+        adjusted_segments: list[float] = _adjust_segments_pipe(adjusted_segments_config)
+
+        if adjusted_segments == []:
+            logger.error(f"No valid segments found for {_shadow.input_file}.")
+            return ERROR_CODE.NO_VALID_SEGMENTS
+
+        try:
+            # Perform advanced keep or remove by split segments
+            KeepOrRemove(
+                input_file=_shadow.input_file,
+                output_file=_shadow.output_file,
+                video_segments=adjusted_segments,
+                even_further=_shadow.even_further,
+                odd_further=_shadow.odd_further,
+                delete_after=_shadow.delete_after,
+            ).render()
+            return _shadow.output_file
+
+        except Exception as e:
+            logger.error(
+                f"Failed to {_shadow.task_descripton} for {_shadow.input_file}. Error: {e}"
+            )
+            raise e
+
+
+class CutMotionless(FFCreateTask):
+    threshold: float = DEFAULTS.motionless_threshold.value
+    sampling_duration: float = DEFAULTS.sampling_duration.value
+    seg_min_duration: float = DEFAULTS.seg_min_duration.value
+    even_further: FurtherMethod = (
+        "remove"  # For other segments, remove means remove, None means copy
+    )
+    odd_further: FurtherMethod = (
+        None  # For segments, remove means remove, None means copy
+    )
+
+    def model_post_init(self, *args, **kwargs):
+        self.task_descripton = f"{_TASKS.CUT_MOTIONLESS}_by_{self.threshold}"
+        # Handle input and output file path
+        self.input_file = Path(self.input_file)
+        self.output_file = _handle_output_file_path(
+            self.input_file, self.output_file, self.task_descripton
+        )
+
+    @timing
+    def render(self) -> Path | ERROR_CODE:
+        _shadow = copy.copy(self)
+        logger.info(
+            f"{_shadow.task_descripton.capitalize()} {_shadow.input_file} to {_shadow.output_file} with {_shadow.threshold = }, {_shadow.sampling_duration = }, {_shadow.seg_min_duration = }."
+        )
+
+        # Extract motion segments
+        motion_str: str = str(
+            _GetMotionSegments(
+                input_file=_shadow.input_file,
+                sampling_duration=_shadow.sampling_duration,
+            ).render()
+        )
+        motion_info, total_duration = _extract_motion_info(motion_str)
+        motion_segments = _extract_motion_segments(motion_info, _shadow.threshold)
+
+        if motion_segments == [0.0]:
+            logger.error(f"No valid segments found for {_shadow.input_file}.")
+            return ERROR_CODE.NO_VALID_SEGMENTS
+
+        # Extract keyframes
+        keyframes = FPRenderTasks().keyframes(_shadow.input_file).render()
+
+        # Adjust segments
+        adjusted_segments_config = AdjustSegmentsConfig(
+            segments=motion_segments,
+            seg_min_duration=_shadow.seg_min_duration,
+            total_duration=total_duration,
+            keyframes=keyframes,
+        )
+        adjusted_segments: list[float] = _adjust_segments_pipe(adjusted_segments_config)
+
+        if adjusted_segments == []:
+            logger.error(f"No valid segments found for {_shadow.input_file}.")
+            return ERROR_CODE.NO_VALID_SEGMENTS
+
+        try:
+            # Perform advanced keep or remove by split segments
+            KeepOrRemove(
+                input_file=_shadow.input_file,
+                output_file=_shadow.output_file,
+                video_segments=adjusted_segments,
+                even_further=_shadow.even_further,
+                odd_further=_shadow.odd_further,
+                delete_after=_shadow.delete_after,
+            ).render()
+            return _shadow.output_file
+
+        except Exception as e:
+            logger.error(
+                f"Failed to {_shadow.task_descripton} for {_shadow.input_file}. Error: {e}"
+            )
+            raise e
+
+
+# For PartitionVideo
+def _get_segments_from_parts_count(
+    duration: float | str, parts_count: int, portion: Optional[list[int]] = None
+) -> list[str]:
+    if parts_count <= 0:
+        raise ValueError("parts_count must be greater than 0")
+
+    if isinstance(duration, str):
+        duration = _convert_timestamp_to_seconds(duration)
+
+    if portion is None:
+        portion = [1] * parts_count
+    # Error hadling
+    if sum(portion) != parts_count:
+        raise ValueError(
+            f"Sum of portions ({sum(portion)}) must equal to parts_count ({parts_count})"
+        )
+
+    segment_length = duration / parts_count
+    split_points = [
+        _convert_seconds_to_timestamp(segment_length * ap)
+        for ap in accumulate(p for p in portion[:-1])
+    ]
+
+    return split_points
+
+
+# For Speedup
 def _create_force_keyframes_kwargs(
     keyframe_interval: int = DEFAULTS.keyframe_interval.value,
 ) -> dict[str, str]:
@@ -934,7 +1247,7 @@ def _create_speedup_kwargs(multiple: float) -> dict[str, str]:
     )
 
 
-# for jumpcut
+# For Jumpcut
 def _create_jumpcut_kwargs(
     b1_duration: float,
     b2_duration: float,
@@ -970,7 +1283,7 @@ def _create_jumpcut_kwargs(
     return args
 
 
-# merge
+# For Merge
 def create_merge_txt(
     video_files_source: Path | list[Path], output_txt: Path | None = None
 ) -> Path:
@@ -1002,353 +1315,6 @@ def create_merge_txt(
             f.write(f"file '{video_path}'\n")
 
     return output_txt
-
-
-# keep or remove copy/rendering by split segs
-def advanced_keep_or_remove_by_split_segs(
-    input_file: Path | str,
-    output_file: Path | str | None,
-    video_segments: list[str] | list[float],
-    even_further: FurtherMethod = "remove",  # For other segments, remove means remove, None means copy
-    odd_further: FurtherMethod = None,  # For segments, remove means remove, None means copy
-    remove_temp_handle: bool = True,
-    delete_after: bool = False,
-) -> int | Path:
-    task_descripton = _TASKS.KEEP_OR_REMOVE + "_split"
-    input_file = Path(input_file)
-
-    # Handle output file path
-    output_file = _handle_output_file_path(input_file, output_file, task_descripton)
-
-    logger.info(
-        f"{task_descripton.capitalize()} {input_file.name} to {output_file.name} with {even_further = } ,{odd_further = }."
-    )
-
-    # convert to timestamp if needed
-    video_segments = list(
-        _convert_seconds_to_timestamp(s) if isinstance(s, (float, int)) else s
-        for s in video_segments
-    )
-
-    try:
-        # Split videos
-        temp_dir: Path = Path(tempfile.mkdtemp(prefix=DEFAULTS.temp_dir_prefix.value))
-        FFRenderTasks(delete_after=delete_after).split_segments(
-            input_file=input_file,
-            video_segments=video_segments,
-            output_dir=temp_dir,
-        ).render()
-
-        video_files: list[Path] = sorted(
-            temp_dir.glob(f"*{input_file.suffix}"),
-            key=lambda video_file: int(video_file.stem.split("_")[0]),
-        )
-
-        further_methods: dict[int, FurtherMethod] = {
-            0: even_further,
-            1: odd_further,
-        }
-
-        # Use ThreadPoolExecutor to manage rendreing tasks
-        # Create the executor once for all tasks
-        futures = []
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=DEFAULTS.num_cores.value
-        ) as executor:
-            for video in video_files:
-                index = int(video.stem.split("_")[0])
-                i_remainder = index % 2
-                further_method: FurtherMethod = further_methods[i_remainder]
-
-                # Remove unwanted segments
-                if further_method == "remove":
-                    os.remove(video)
-                    continue
-
-                # Skip further rendering if the segment is to be copied
-                if further_method is None:
-                    continue
-
-                # Submit the further render task to the executor properly
-                future = executor.submit(
-                    further_method, input_file=video, output_file=video
-                )
-                futures.append(future)
-
-            # Wait for all submitted tasks to complete and then move files
-            for future in futures:
-                future.result()  # This will raise exceptions if any occurred during task execution
-
-        # Merge the kept segments
-        rendered_video_files: list[Path] = sorted(
-            temp_dir.glob(f"*{input_file.suffix}"),
-            key=lambda video_file: int(video_file.stem.split("_")[0]),
-        )
-        FFRenderTasks().merge(rendered_video_files, output_file).render()
-
-        # Clean up temporary files and dir
-        if remove_temp_handle:
-            for video in temp_dir.iterdir():
-                os.remove(video)
-            os.rmdir(temp_dir)
-
-        return output_file
-
-    except Exception as e:
-        logger.error(f"Failed to {task_descripton} for {input_file}. Error: {e}")
-        return 1
-
-
-# Split segments by part
-def _get_segments_from_parts_count(
-    duration: float | str, parts_count: int, portion: Optional[list[int]] = None
-) -> list[str]:
-    if parts_count <= 0:
-        raise ValueError("parts_count must be greater than 0")
-
-    if isinstance(duration, str):
-        duration = _convert_timestamp_to_seconds(duration)
-
-    if portion is None:
-        portion = [1] * parts_count
-    # Error hadling
-    if sum(portion) != parts_count:
-        raise ValueError(
-            f"Sum of portions ({sum(portion)}) must equal to parts_count ({parts_count})"
-        )
-
-    segment_length = duration / parts_count
-    split_points = [
-        _convert_seconds_to_timestamp(segment_length * ap)
-        for ap in accumulate(p for p in portion[:-1])
-    ]
-
-    return split_points
-
-
-# Partitioning
-type PortionMethodSpecific = list[tuple[int, FurtherMethod]] | list[tuple[int, None]]
-type PortionMethod = PortionMethodSpecific | list[tuple[int, FurtherMethod] | int]
-
-
-class PartitionConfig(BaseModel):
-    model_config = {"arbitrary_types_allowed": True}
-    count: int = Field(default=0, gt=0)
-    portion_method: Optional[PortionMethod] = None
-
-    def model_post_init(self, *args, **kwargs):
-        if self.count == 0 and self.portion_method is None:
-            self.count = 3
-        if self.count == 0 and self.portion_method is not None:
-            self.count = sum(p[0] for p in self.portion_method)  # type: ignore
-        if self.portion_method is None:
-            self.portion_method = [(1, None)] * self.count
-
-    @field_validator("portion_method")
-    @classmethod
-    def validate_portion_sum(
-        cls, portion_method: PortionMethod, info
-    ) -> PortionMethodSpecific:
-        if portion_method is not None:
-            _portion_method: PortionMethodSpecific = [
-                (p, None) if isinstance(p, int) else p for p in portion_method
-            ]
-            if (_sum := sum(p[0] for p in _portion_method)) != (
-                _count := info.data["count"]
-            ) and info.data["count"] != 0:
-                raise ValueError(
-                    f"Sum of portions ({_sum}) must equal to count ({_count})"
-                )
-            return _portion_method
-
-
-@timing
-def partion_video(
-    input_file: Path | str,
-    partition_config: Optional[PartitionConfig] = None,
-    output_dir: Optional[Path | str] = None,
-    output_file: Path | str | None = None,
-    delete_after: bool = False,
-) -> Path | ERROR_CODE | int:
-    if partition_config is None:
-        partition_config = PartitionConfig()
-
-    task_descripton = _TASKS.PARTITION
-    input_file = Path(input_file)
-    if output_dir is None:
-        output_dir = input_file.parent / f"{input_file.stem}_{task_descripton}"
-    else:
-        output_dir = Path(output_dir)
-    output_dir.mkdir(exist_ok=True)
-
-    duration: float = FPRenderTasks().duration(input_file).render()
-    video_segments: list[str] = _get_segments_from_parts_count(
-        duration,
-        partition_config.count,
-        [p[0] for p in partition_config.portion_method],  # type: ignore
-    )
-    logger.info(f"{video_segments = }")
-    logger.info(
-        f"{task_descripton.capitalize()} {input_file.name} to {output_dir} with {partition_config}."
-    )
-
-    try:
-        # Split videos
-        temp_dir: Path = Path(tempfile.mkdtemp(prefix=DEFAULTS.temp_dir_prefix.value))
-        FFRenderTasks(delete_after=delete_after).split_segments(
-            input_file=input_file,
-            video_segments=video_segments,
-            output_dir=temp_dir,
-        ).render()
-
-        video_files: list[Path] = sorted(
-            temp_dir.glob(f"*{input_file.suffix}"),
-            key=lambda video_file: int(video_file.stem.split("_")[0]),
-        )
-
-        # Further render videos
-        new_video_files: list[Path] = []
-        futures = []
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=DEFAULTS.num_cores.value
-        ) as executor:
-            for video in video_files:
-                seg_output_file: Path = output_dir / video.name
-                index = int(video.stem.split("_")[0])
-                further_method: FurtherMethod = partition_config.portion_method[index][  # type:ignore
-                    1
-                ]
-
-                if further_method == "remove":
-                    os.remove(video)
-                    continue
-
-                if further_method is None:
-                    shutil.move(str(video), str(seg_output_file))
-                    new_video_files.append(seg_output_file)
-                    continue
-
-                # Submit the task and store the future
-                future = executor.submit(
-                    further_method, input_file=video, output_file=video
-                )
-                futures.append((future, video, seg_output_file))
-
-        # Wait for all submitted tasks to complete and then move files
-        for future, video, seg_output_file in futures:
-            future.result()  # This will raise exceptions if any occurred during task execution
-            shutil.move(str(video), str(seg_output_file))
-            new_video_files.append(seg_output_file)
-
-        # Optionally, sort the new video files
-        new_video_files = sorted(
-            new_video_files, key=lambda video: int(video.stem.split("_")[0])
-        )
-
-        os.rmdir(temp_dir)
-
-        if output_file is not None:
-            output_file = _handle_output_file_path(
-                input_file, output_file, task_descripton
-            )
-            FFRenderTasks().merge(
-                input_dir_or_files=new_video_files,  # type:ignore
-                output_file=Path(output_file),
-            ).render()  # type:ignore
-            return output_file
-
-        return 0
-
-    except Exception as e:
-        logger.error(f"Failed to {task_descripton} for {input_file}. Error: {e}")
-        raise e
-
-
-# cut silence copy / render
-# Extract non silence segments info
-def _extract_non_silence_info(
-    non_silence_segs_str: str,
-) -> tuple[list[float], float, float]:
-    # Total duration
-    total_duration_pattern = r"Duration: (.+?),"
-    total_duration_match: str | None = re.findall(
-        total_duration_pattern, non_silence_segs_str
-    )[0]
-    total_duration: float = (
-        _convert_timestamp_to_seconds(total_duration_match)
-        if total_duration_match
-        else 0.0
-    )
-
-    # Regular expression to find all floats after "silence_start or end: "
-    silence_seg_pattern = r"silence_(?:start|end): ([0-9.]+)"
-    # Find all matches in the log data
-    silence_seg_matches: list[str] = re.findall(
-        silence_seg_pattern, non_silence_segs_str
-    )
-    # Convert matches to a list of floats
-    non_silence_segs: list[float] = list(float(match) for match in silence_seg_matches)
-    non_silence_segs = [0.0] + non_silence_segs + [total_duration]
-
-    # Regular expression to find all floats after silence_duration: "
-    silence_duration_pattern = r"silence_duration: ([0-9.]+)"
-    silence_duration_matches: list[str] | Generator[float] = re.findall(
-        silence_duration_pattern, non_silence_segs_str
-    )
-    silence_duration_matches = (float(s) for s in silence_duration_matches)
-    total_silence_duration: float = sum(silence_duration_matches)
-
-    return (non_silence_segs, total_duration, total_silence_duration)
-
-
-# Motion detect
-def _extract_motion_info(
-    motion_segs_str: str,
-) -> tuple[dict[float, float], float]:
-    # Total duration
-    total_duration_pattern = r"Duration: (.+?),"
-    total_duration_match: str | None = re.findall(
-        total_duration_pattern, motion_segs_str
-    )[0]
-    total_duration: float = (
-        _convert_timestamp_to_seconds(total_duration_match)
-        if total_duration_match
-        else 0.0
-    )
-
-    # Regular expression to find all floats after "pts_time:"
-    motion_seg_pattern = r"pts_time:([0-9.]+)"
-    # Find all matches in the log data
-    motion_seg_matches: list[str] = re.findall(motion_seg_pattern, motion_segs_str)
-    # Convert matches to a list of floats
-    motion_segs: list[float] = list(float(match) for match in motion_seg_matches)
-
-    # Regular expression to find all floats after "lavfi.scene_score="
-    scene_score_pattern = r"lavfi.scene_score=([0-9.]+)"
-    scene_score_matches: list[str] | Generator[float] = re.findall(
-        scene_score_pattern, motion_segs_str
-    )
-    scene_score_segs = list(float(s) for s in scene_score_matches)
-
-    motion_segs_dict: dict[float, float] = dict(zip(motion_segs, scene_score_segs))
-
-    return (motion_segs_dict, total_duration)
-
-
-def _extract_motion_segments(
-    motion_info: dict[float, float],
-    threshold: float = DEFAULTS.motionless_threshold.value,
-) -> list[float]:
-    break_points = []
-    prev_above = False  # Track if last added was above the threshold
-
-    for _time, score in motion_info.items():
-        if (score > threshold and not prev_above) or (
-            score <= threshold and prev_above
-        ):
-            break_points.append(_time)
-            prev_above = score > threshold  # Update the flag
-    return break_points
 
 
 # Adjust segments
@@ -1517,164 +1483,7 @@ def _adjust_segments_pipe(
     return merged_overlapping_segments
 
 
-@timing
-def cut_silence(
-    input_file: Path | str,
-    output_file: Path | str | None = None,
-    dB: int = DEFAULTS.db_threshold.value,
-    sampling_duration: float = DEFAULTS.sampling_duration.value,
-    seg_min_duration: float = DEFAULTS.seg_min_duration.value,
-    even_further: FurtherMethod = "remove",  # For other segments, remove means remove, None means copy
-    odd_further: FurtherMethod = None,  # For segments, remove means remove, None means copy
-    delete_after: bool = False,
-) -> Path | ERROR_CODE:
-    class ERROR_CODE(Enum):
-        DURATION_LESS_THAN_ZERO = auto()
-        NO_VALID_SEGMENTS = auto()
-        FAILED_TO_CUT = auto()
-
-    if sampling_duration <= 0:
-        logger.error("Duration must be greater than 0.")
-        return ERROR_CODE.DURATION_LESS_THAN_ZERO
-
-    # init task
-    task_descripton = f"{_TASKS.CUT_SILENCE}_by_{dB}"
-    input_file = Path(input_file)
-
-    # Handle output file path
-    output_file = _handle_output_file_path(input_file, output_file, task_descripton)
-
-    # Handle temp output file
-    temp_output_file: Path = output_file.parent / (
-        output_file.stem + "_processing" + output_file.suffix
-    )
-
-    logger.info(
-        f"{task_descripton.capitalize()} {input_file} to {output_file} with {dB = } ,{sampling_duration = }, {seg_min_duration = }."
-    )
-
-    non_silence_str: str = str(
-        FFRenderTasks()
-        .get_silence_segs(
-            input_file=input_file,
-            dB=dB,
-            sampling_duration=sampling_duration,
-        )
-        .render()
-    )
-    non_silence_segments, total_duration, _ = _extract_non_silence_info(non_silence_str)
-    logger.info(f"{non_silence_segments = }")
-
-    keyframes = FPRenderTasks().keyframes(input_file).render()
-
-    adjusted_segments_config = AdjustSegmentsConfig(
-        segments=non_silence_segments,
-        seg_min_duration=seg_min_duration,
-        total_duration=total_duration,
-        keyframes=keyframes,
-    )
-
-    adjusted_segments: list[float] = _adjust_segments_pipe(adjusted_segments_config)
-
-    if adjusted_segments == []:
-        logger.error(f"No valid segments found for {input_file}.")
-        return ERROR_CODE.NO_VALID_SEGMENTS
-
-    try:
-        advanced_keep_or_remove_by_split_segs(
-            input_file=input_file,
-            output_file=temp_output_file,
-            video_segments=adjusted_segments,
-            even_further=even_further,
-            odd_further=odd_further,
-            delete_after=delete_after,
-        )
-        temp_output_file.replace(output_file)
-
-        return output_file
-
-    except Exception as e:
-        logger.error(f"Failed to {task_descripton} for {input_file}. Error: {e}")
-        raise e
-        # return ERROR_CODE.FAILED_TO_CUT
-
-
-@timing
-def cut_motionless(
-    input_file: Path | str,
-    output_file: Path | str | None = None,
-    threshold: float = DEFAULTS.motionless_threshold.value,
-    sampling_duration: float = DEFAULTS.sampling_duration.value,
-    seg_min_duration: float = DEFAULTS.seg_min_duration.value,
-    even_further: FurtherMethod = "remove",  # For other segments, remove means remove, None means copy
-    odd_further: FurtherMethod = None,  # For segments, remove means remove, None means copy
-    delete_after: bool = False,
-) -> Path | ERROR_CODE:
-    if sampling_duration <= 0:
-        logger.error("Duration must be greater than 0.")
-        return ERROR_CODE.DURATION_LESS_THAN_ZERO
-
-    # init task
-    task_descripton = f"{_TASKS.CUT_MOTIONLESS}_by_{threshold}"
-    input_file = Path(input_file)
-
-    # Handle output file path
-    output_file = _handle_output_file_path(input_file, output_file, task_descripton)
-
-    # Handle temp output file
-    temp_output_file: Path = output_file.parent / (
-        output_file.stem + "_processing" + output_file.suffix
-    )
-
-    logger.info(
-        f"{task_descripton.capitalize()} {input_file} to {output_file} with {threshold = } ,{sampling_duration = }, {seg_min_duration = }."
-    )
-
-    motion_str: str = str(
-        FFRenderTasks()
-        .get_motion_segs(input_file=input_file, sampling_duration=sampling_duration)
-        .render()
-    )
-    motion_info, total_duration = _extract_motion_info(motion_str)
-    motion_segs = _extract_motion_segments(motion_info, threshold)
-
-    if motion_segs == [0.0]:
-        logger.error(f"No valid segments found for {input_file}.")
-        return ERROR_CODE.NO_VALID_SEGMENTS
-
-    keyframes = FPRenderTasks().keyframes(input_file).render()
-
-    adjusted_segments_config = AdjustSegmentsConfig(
-        segments=motion_segs,
-        seg_min_duration=seg_min_duration,
-        total_duration=total_duration,
-        keyframes=keyframes,
-    )
-
-    adjusted_segments: list[float] = _adjust_segments_pipe(adjusted_segments_config)
-
-    if adjusted_segments == []:
-        logger.error(f"No valid segments found for {input_file}.")
-        return ERROR_CODE.NO_VALID_SEGMENTS
-
-    try:
-        advanced_keep_or_remove_by_split_segs(
-            input_file=input_file,
-            output_file=temp_output_file,
-            video_segments=adjusted_segments,
-            even_further=even_further,
-            odd_further=odd_further,
-            delete_after=delete_after,
-        )
-        temp_output_file.replace(output_file)
-        return output_file
-
-    except Exception as e:
-        logger.error(f"Failed to {task_descripton} for {input_file}. Error: {e}")
-        raise e
-
-
-# cut rerender
+# Create cut rerender filters
 class CSFiltersInfo(Enum):
     VIDEO = {
         "filename": f"temp_{time.strftime('%Y%m%d-%H%M%S')}_video_filter_",
@@ -1720,37 +1529,63 @@ def _create_cut_segs_filter_tempfile(
     return path
 
 
-def _create_cut_sl_kwargs(
-    input_file: Path | str, dB: int, sampling_duration: float
-) -> dict:
-    non_silence_str: str = str(
-        FFRenderTasks()
-        .get_silence_segs(
-            input_file=input_file, dB=dB, sampling_duration=sampling_duration
-        )
-        .render()
-    )
-    non_silence_segments, total_duration, _ = _extract_non_silence_info(non_silence_str)
-    video_filter_script: Path = _create_cut_segs_filter_tempfile(
-        CSFiltersInfo.VIDEO, non_silence_segments
-    )
-    audio_filter_script: Path = _create_cut_segs_filter_tempfile(
-        CSFiltersInfo.AUDIO, non_silence_segments
+# For CutMotionless/Rerender
+def _extract_motion_info(
+    motion_segs_str: str,
+) -> tuple[dict[float, float], float]:
+    # Total duration
+    total_duration_pattern = r"Duration: (.+?),"
+    total_duration_match: str | None = re.findall(
+        total_duration_pattern, motion_segs_str
+    )[0]
+    total_duration: float = (
+        _convert_timestamp_to_seconds(total_duration_match)
+        if total_duration_match
+        else 0.0
     )
 
-    return {
-        "filter_script:v": video_filter_script,
-        "filter_script:a": audio_filter_script,
-    }
+    # Regular expression to find all floats after "pts_time:"
+    motion_seg_pattern = r"pts_time:([0-9.]+)"
+    # Find all matches in the log data
+    motion_seg_matches: list[str] = re.findall(motion_seg_pattern, motion_segs_str)
+    # Convert matches to a list of floats
+    motion_segs: list[float] = list(float(match) for match in motion_seg_matches)
+
+    # Regular expression to find all floats after "lavfi.scene_score="
+    scene_score_pattern = r"lavfi.scene_score=([0-9.]+)"
+    scene_score_matches: list[str] | Generator[float] = re.findall(
+        scene_score_pattern, motion_segs_str
+    )
+    scene_score_segs = list(float(s) for s in scene_score_matches)
+
+    motion_segs_dict: dict[float, float] = dict(zip(motion_segs, scene_score_segs))
+
+    return (motion_segs_dict, total_duration)
+
+
+def _extract_motion_segments(
+    motion_info: dict[float, float],
+    threshold: float = DEFAULTS.motionless_threshold.value,
+) -> list[float]:
+    break_points = []
+    prev_above = False  # Track if last added was above the threshold
+
+    for _time, score in motion_info.items():
+        if (score > threshold and not prev_above) or (
+            score <= threshold and prev_above
+        ):
+            break_points.append(_time)
+            prev_above = score > threshold  # Update the flag
+    return break_points
 
 
 def _create_cut_motionless_kwargs(
     input_file: Path | str, threshold: float, sampling_duration: float
 ) -> dict:
     motion_str: str = str(
-        FFRenderTasks()
-        .get_motion_segs(input_file=input_file, sampling_duration=sampling_duration)
-        .render()
+        _GetMotionSegments(
+            input_file=input_file, sampling_duration=sampling_duration
+        ).render()
     )
     motion_info, total_duration = _extract_motion_info(motion_str)
     motion_segs = _extract_motion_segments(motion_info, threshold)
@@ -1775,38 +1610,81 @@ def _create_cut_motionless_kwargs(
     }
 
 
+# For CutSilence/Rerender
+def _extract_non_silence_info(
+    non_silence_segs_str: str,
+) -> tuple[list[float], float, float]:
+    # Total duration
+    total_duration_pattern = r"Duration: (.+?),"
+    total_duration_match: str | None = re.findall(
+        total_duration_pattern, non_silence_segs_str
+    )[0]
+    total_duration: float = (
+        _convert_timestamp_to_seconds(total_duration_match)
+        if total_duration_match
+        else 0.0
+    )
+
+    # Regular expression to find all floats after "silence_start or end: "
+    silence_seg_pattern = r"silence_(?:start|end): ([0-9.]+)"
+    # Find all matches in the log data
+    silence_seg_matches: list[str] = re.findall(
+        silence_seg_pattern, non_silence_segs_str
+    )
+    # Convert matches to a list of floats
+    non_silence_segs: list[float] = list(float(match) for match in silence_seg_matches)
+    non_silence_segs = [0.0] + non_silence_segs + [total_duration]
+
+    # Regular expression to find all floats after silence_duration: "
+    silence_duration_pattern = r"silence_duration: ([0-9.]+)"
+    silence_duration_matches: list[str] | Generator[float] = re.findall(
+        silence_duration_pattern, non_silence_segs_str
+    )
+    silence_duration_matches = (float(s) for s in silence_duration_matches)
+    total_silence_duration: float = sum(silence_duration_matches)
+
+    return (non_silence_segs, total_duration, total_silence_duration)
+
+
+def _create_cut_sl_kwargs(
+    input_file: Path | str, dB: int, sampling_duration: float
+) -> dict:
+    non_silence_str: str = str(
+        _GetSilenceSegments(
+            input_file=input_file, dB=dB, sampling_duration=sampling_duration
+        ).render()
+    )
+    non_silence_segments, total_duration, _ = _extract_non_silence_info(non_silence_str)
+    video_filter_script: Path = _create_cut_segs_filter_tempfile(
+        CSFiltersInfo.VIDEO, non_silence_segments
+    )
+    audio_filter_script: Path = _create_cut_segs_filter_tempfile(
+        CSFiltersInfo.AUDIO, non_silence_segments
+    )
+
+    return {
+        "filter_script:v": video_filter_script,
+        "filter_script:a": audio_filter_script,
+    }
+
+
+# Partial tasks
 def _partial_render_task(
     task: MethodType | FunctionType | Callable,
     **config,
 ) -> FurtherRenderTask:
-    if "FFRenderTasks" in task.__qualname__:
+    def _partial(
+        input_file: str | Path,
+        output_file: str | Path,
+        options: OptionFFRender | None = None,
+    ) -> Any:
+        return (
+            task(input_file=input_file, output_file=output_file, **config)
+            .override_option(options=options)
+            .render()
+        )
 
-        def _partial1(
-            input_file: str | Path,
-            output_file: str | Path,
-            options: OptionFFRender | None = None,
-        ) -> Any:
-            return (
-                task(input_file=input_file, output_file=output_file, **config)
-                .override_option(options=options)
-                .render()
-            )
-
-        return _partial1
-    else:
-
-        def _partial2(
-            input_file: str | Path,
-            output_file: str | Path,
-            options: OptionFFRender | None = None,
-        ) -> Any:
-            if options is None:
-                options = {}
-            return task(
-                input_file=input_file, output_file=output_file, **(config | options)
-            )
-
-        return _partial2
+    return _partial
 
 
 class PARTIAL_TASKS(FunctionEnum):
@@ -1817,10 +1695,10 @@ class PARTIAL_TASKS(FunctionEnum):
         output_kwargs: FFKwargs | None = None,
     ):
         return _partial_render_task(
-            task=FFRenderTasks().speedup,
+            task=Speedup,
             multiple=multiple,
-            input_kwargs=input_kwargs,
-            output_kwargs=output_kwargs,
+            input_kwargs=input_kwargs or {},
+            output_kwargs=output_kwargs or {},
         )
 
     @staticmethod
@@ -1833,13 +1711,13 @@ class PARTIAL_TASKS(FunctionEnum):
         output_kwargs: FFKwargs | None = None,
     ):
         return _partial_render_task(
-            task=FFRenderTasks().jumpcut,
+            task=Jumpcut,
             b1_duration=b1_duration,
             b2_duration=b2_duration,
             b1_multiple=b1_multiple,
             b2_multiple=b2_multiple,
-            input_kwargs=input_kwargs,
-            output_kwargs=output_kwargs,
+            input_kwargs=input_kwargs or {},
+            output_kwargs=output_kwargs or {},
         )
 
     @staticmethod
@@ -1848,9 +1726,9 @@ class PARTIAL_TASKS(FunctionEnum):
         output_kwargs: FFKwargs | None = None,
     ):
         return _partial_render_task(
-            task=FFRenderTasks().custom,
-            input_kwargs=input_kwargs,
-            output_kwargs=output_kwargs,
+            task=Custom,
+            input_kwargs=input_kwargs or {},
+            output_kwargs=output_kwargs or {},
         )
 
     @staticmethod
@@ -1862,12 +1740,12 @@ class PARTIAL_TASKS(FunctionEnum):
         output_kwargs: FFKwargs | None = None,
     ):
         return _partial_render_task(
-            task=FFRenderTasks().cut,
+            task=Cut,
             ss=ss,
             to=to,
             rerender=rerender,
-            input_kwargs=input_kwargs,
-            output_kwargs=output_kwargs,
+            input_kwargs=input_kwargs or {},
+            output_kwargs=output_kwargs or {},
         )
 
     @staticmethod
@@ -1878,11 +1756,11 @@ class PARTIAL_TASKS(FunctionEnum):
         output_kwargs: FFKwargs | None = None,
     ):
         return _partial_render_task(
-            task=FFRenderTasks().cut_silence_rerender,
+            task=CutSilenceRerender,
             dB=dB,
             sampling_duration=sampling_duration,
-            input_kwargs=input_kwargs,
-            output_kwargs=output_kwargs,
+            input_kwargs=input_kwargs or {},
+            output_kwargs=output_kwargs or {},
         )
 
     @staticmethod
@@ -1894,7 +1772,7 @@ class PARTIAL_TASKS(FunctionEnum):
         odd_further: FurtherMethod = None,
     ):  # For segments, remove means remove, None means copy
         return _partial_render_task(
-            task=cut_silence,
+            task=CutSilence,
             dB=dB,
             sampling_duration=sampling_duration,
             seg_min_duration=seg_min_duration,
@@ -1911,7 +1789,7 @@ class PARTIAL_TASKS(FunctionEnum):
         odd_further: FurtherMethod = None,  # For segments, remove means remove, None means copy
     ):
         return _partial_render_task(
-            task=cut_motionless,
+            task=CutMotionless,
             threshold=threshold,
             sampling_duration=sampling_duration,
             seg_min_duration=seg_min_duration,
@@ -1921,11 +1799,18 @@ class PARTIAL_TASKS(FunctionEnum):
 
     @staticmethod
     def partion_video(
-        partition_config: Optional[PartitionConfig] = None,
-        output_dir: Optional[Path | str] = None,
+        count: int = 0,  # Easy way to create portion_method
+        portion_method: PortionMethod | None = None,  # Main logic for partitioning
+        output_dir: Path | str | None = None,
     ):
         return _partial_render_task(
-            task=partion_video,
-            partition_config=partition_config,
+            task=PartitionVideo,
+            count=count,
+            portion_method=portion_method,
             output_dir=output_dir,
         )
+
+
+# class PartialTasks(FFRenderTasks):
+#     task: FFRenderTasks | FunctionType | Callable
+#     config: FFKwargs | None = None

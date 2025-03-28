@@ -38,4 +38,4 @@ class VideoSuffix(StrEnum):
 
 
 type FFKwargsValue = str | Path | float | int
-type FFKwargs = dict[str, FFKwargsValue]
+type FFKwargs = dict[str, FFKwargsValue] | dict[str, str]

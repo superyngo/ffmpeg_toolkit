@@ -1,14 +1,20 @@
 import os
 from pathlib import Path
 from .ffmpeg_toolkit import (
-    PARTIAL_TASKS,
-    cut_silence,
-    cut_motionless,
-    partion_video,
-    PartitionConfig,
-    FPRenderTasks,
-    FFRenderTasks,
     DEFAULTS,
+    PARTIAL_TASKS,
+    PartitionVideo,
+    Custom,
+    CutSilence,
+    CutMotionless,
+    Cut,
+    Speedup,
+    Jumpcut,
+    Merge,
+    CutSilenceRerender,
+    CutMotionlessRerender,
+    SplitSegments,
+    FPRenderTasks,
 )
 from . import ffmpeg_types as types
 
@@ -24,13 +30,19 @@ os.environ["PATH"] = str(bin_path) + os.pathsep + os.environ["PATH"]
 
 
 __all__: list[str] = [
-    "PARTIAL_TASKS",
-    "cut_silence",
-    "cut_motionless",
-    "partion_video",
-    "PartitionConfig",
-    "FPRenderTasks",
-    "FFRenderTasks",
-    "DEFAULTS",
     "types",
+    "DEFAULTS",
+    "PARTIAL_TASKS",
+    "PartitionVideo",
+    "CutSilence",
+    "CutMotionless",
+    "Custom",
+    "Cut",
+    "Speedup",
+    "Jumpcut",
+    "Merge",
+    "CutSilenceRerender",
+    "CutMotionlessRerender",
+    "SplitSegments",
+    "FPRenderTasks",
 ]
