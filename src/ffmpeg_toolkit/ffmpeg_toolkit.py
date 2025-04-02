@@ -28,12 +28,24 @@ try:
 except ImportError:
     # Fallback to a default value
     class logger:
+        """Logger class that provides basic logging functionality when the app.common.logger is not available."""
+
         @classmethod
         def info(cls, message: str) -> None:
+            """Log an informational message.
+
+            Args:
+                message: The message to log
+            """
             print(message)
 
         @classmethod
         def error(cls, message: str) -> None:
+            """Log an error message.
+
+            Args:
+                message: The error message to log
+            """
             print(message)
 
 
@@ -49,6 +61,8 @@ type FurtherMethod = PARTIAL_TASKS | Literal["remove"] | None
 
 
 class DEFAULTS(Enum):
+    """Default values used throughout the toolkit."""
+
     num_cores = os.cpu_count() or 4
     hwaccel = "auto"
     loglevel = "warning"
@@ -63,12 +77,23 @@ class DEFAULTS(Enum):
 
 
 class ERROR_CODE(Enum):
+    """Error codes used to indicate specific failure conditions."""
+
     DURATION_LESS_THAN_ZERO = auto()
     NO_VALID_SEGMENTS = auto()
     FAILED_TO_CUT = auto()
 
 
 def timing(func: Callable):
+    """Decorator to measure and log the execution time of a function.
+
+    Args:
+        func: The function to time
+
+    Returns:
+        A wrapped function that logs execution time
+    """
+
     @wraps(func)
     def wrapper(*args, **kwargs):
         start = time.perf_counter()
@@ -81,17 +106,35 @@ def timing(func: Callable):
 
 
 def _convert_timestamp_to_seconds(timestamp: str) -> float:
+    """Convert a timestamp in format 'HH:MM:SS' to seconds.
+
+    Args:
+        timestamp: Time in format 'HH:MM:SS'
+
+    Returns:
+        Equivalent time in seconds
+    """
     h, m, s = map(float, timestamp.split(":"))
     return h * 3600 + m * 60 + s
 
 
 def _convert_seconds_to_timestamp(seconds: float) -> str:
+    """Convert seconds to a timestamp in format 'HH:MM:SS.mmm'.
+
+    Args:
+        seconds: Time in seconds
+
+    Returns:
+        Formatted timestamp string
+    """
     h, m = divmod(seconds, 3600)
     m, s = divmod(m, 60)
     return f"{int(h):02}:{int(m):02}:{s:06.3f}"
 
 
 class _TASKS(StrEnum):
+    """Enumeration of task types supported by the FFmpeg toolkit."""
+
     SPEEDUP = auto()
     JUMPCUT = auto()
     CONVERT = auto()
@@ -109,6 +152,8 @@ class _TASKS(StrEnum):
 
 
 class _PROBE_TASKS(StrEnum):
+    """Enumeration of probe task types supported by the FFmpeg toolkit."""
+
     DURATION = auto()
     ENCODING = auto()
     IS_VALID_VIDEO = auto()
@@ -124,6 +169,17 @@ def _create_ff_kwargs(
     output_kwargs: FFKwargs,
     **_,
 ) -> FFKwargs:
+    """Create a complete set of FFmpeg keyword arguments combining default and user-provided values.
+
+    Args:
+        input_file: Path to the input file
+        output_file: Path to the output file
+        input_kwargs: Additional input-related arguments
+        output_kwargs: Additional output-related arguments
+
+    Returns:
+        Combined dictionary of FFmpeg arguments
+    """
     input_kwargs_default: FFKwargs = {
         "hide_banner": "",
         "hwaccel": DEFAULTS.hwaccel.value,
@@ -150,6 +206,16 @@ def _create_fp_kwargs(
     input_kwargs: FFKwargs,
     output_kwargs: FFKwargs,
 ) -> FFKwargs:
+    """Create a complete set of FFprobe keyword arguments combining default and user-provided values.
+
+    Args:
+        input_file: Path to the input file
+        input_kwargs: Additional input-related arguments
+        output_kwargs: Additional output-related arguments
+
+    Returns:
+        Combined dictionary of FFprobe arguments
+    """
     input_kwargs_default: FFKwargs = {
         "hide_banner": "",
     }
@@ -168,13 +234,16 @@ def _create_fp_kwargs(
 
 
 def _dic_to_ffmpeg_kwargs(kwargs: dict | None = None) -> list[str]:
-    """Create ffmpeg args to be executed in subprocess
+    """Create FFmpeg command-line arguments from a dictionary of parameters.
+
+    This function converts a dictionary of FFmpeg parameters into a list of strings
+    that can be passed to subprocess.run() to execute an FFmpeg command.
 
     Args:
-        kwargs (dict | None, optional): _description_. Defaults to None.
+        kwargs: Dictionary of FFmpeg parameters
 
     Returns:
-        list[str | float]: _description_
+        List of command-line arguments for FFmpeg
     """
     args = []
     if kwargs is None:
@@ -197,6 +266,17 @@ def _dic_to_ffmpeg_kwargs(kwargs: dict | None = None) -> list[str]:
 
 @timing
 def _ffmpeg(**ffkwargs) -> subprocess.CompletedProcess[str]:
+    """Execute an FFmpeg command with the provided arguments.
+
+    Args:
+        **ffkwargs: Keyword arguments for FFmpeg
+
+    Returns:
+        The completed process result from subprocess
+
+    Raises:
+        subprocess.CalledProcessError: If FFmpeg command fails
+    """
     command = ["ffmpeg"] + _dic_to_ffmpeg_kwargs(ffkwargs)
     logger.info(f"Executing FFmpeg command: {' '.join(command)}")
     try:
@@ -211,6 +291,17 @@ def _ffmpeg(**ffkwargs) -> subprocess.CompletedProcess[str]:
 
 @timing
 def _ffprobe(**ffkwargs):
+    """Execute an FFprobe command with the provided arguments.
+
+    Args:
+        **ffkwargs: Keyword arguments for FFprobe
+
+    Returns:
+        The completed process result from subprocess
+
+    Raises:
+        subprocess.CalledProcessError: If FFprobe command fails
+    """
     command = ["ffprobe"] + _dic_to_ffmpeg_kwargs(ffkwargs)
     logger.info(f"Executing ffprobe command: {' '.join(command)}")
     try:
@@ -226,6 +317,22 @@ def _ffprobe(**ffkwargs):
 def _handle_output_file_path(
     input_file: Path, output_file: Path | str | None, task_description: str
 ) -> Path:
+    """Handle various output file path scenarios and return a valid output path.
+
+    This function handles cases where output_file is None, a dash ('-'), a directory,
+    or a file, generating appropriate output paths in each case.
+
+    Args:
+        input_file: Path to the input file
+        output_file: Path to the output file or directory, or None
+        task_description: Description of the task for naming
+
+    Returns:
+        Appropriate output path
+
+    Raises:
+        ValueError: If output_file exists and is not a directory
+    """
     # Handle None
     if output_file is None:
         return (
@@ -254,6 +361,8 @@ def _handle_output_file_path(
 
 
 class FFRenderException(TypedDict):
+    """Type definition for render exceptions, providing code, message, and optional hook."""
+
     code: int
     message: str
     hook: NotRequired[Callable[[], Any]]
@@ -261,17 +370,41 @@ class FFRenderException(TypedDict):
 
 # FFProbe taks
 class FPCreateCommand(BaseModel):
+    """Base class for creating FFprobe command configurations.
+
+    Attributes:
+        input_file: Path to the input file
+        input_kwargs: Additional input-related arguments
+        output_kwargs: Additional output-related arguments
+    """
+
     input_file: Path | str = Path()
     input_kwargs: FFKwargs = Field(default_factory=dict)
     output_kwargs: FFKwargs = Field(default_factory=dict)
 
 
 class FPCreateRender(FPCreateCommand):
+    """Base class for creating and executing FFprobe commands.
+
+    Attributes:
+        task_descripton: Description of the probe task
+        exception: Exception information, if any
+        post_task: Function to process results after command execution
+    """
+
     task_descripton: str = "probe"
     exception: Optional[FFRenderException] = None
     post_task: Optional[Callable[..., Any]] = None
 
     def render(self) -> Any:
+        """Execute the FFprobe command and process results.
+
+        Returns:
+            The result of the FFprobe command, processed by post_task if provided
+
+        Raises:
+            Exception: If the FFprobe command fails
+        """
         self.input_file = Path(self.input_file)
 
         # Exception hadling
@@ -312,12 +445,28 @@ class FPCreateRender(FPCreateCommand):
 
 
 class FPRenderTasks(FPCreateRender):
+    """Class providing specific FFprobe task implementations.
+
+    This class implements various FFprobe tasks such as checking video encoding,
+    validating videos, getting duration, keyframes, and frames per second.
+    """
+
     def encode(
         self,
         input_file: str | Path,
         input_kwargs: FFKwargs | None = None,
         output_kwargs: FFKwargs | None = None,
     ) -> Self:
+        """Probe a video file for encoding information.
+
+        Args:
+            input_file: Path to the input file
+            input_kwargs: Additional input-related arguments
+            output_kwargs: Additional output-related arguments
+
+        Returns:
+            Self for method chaining
+        """
         defalut_output_kwargs: FFKwargs = {
             "v": "error",
             "print_format": "json",
@@ -385,6 +534,16 @@ class FPRenderTasks(FPCreateRender):
         input_kwargs: FFKwargs | None = None,
         output_kwargs: FFKwargs | None = None,
     ) -> Self:
+        """Check if a file is a valid video.
+
+        Args:
+            input_file: Path to the input file to validate
+            input_kwargs: Additional input-related arguments
+            output_kwargs: Additional output-related arguments
+
+        Returns:
+            Self for method chaining
+        """
         defalut_output_kwargs: FFKwargs = {
             "v": "error",
             "show_entries": "format=duration",
@@ -418,6 +577,16 @@ class FPRenderTasks(FPCreateRender):
         input_kwargs: FFKwargs | None = None,
         output_kwargs: FFKwargs | None = None,
     ) -> Self:
+        """Get the duration of a video file.
+
+        Args:
+            input_file: Path to the input file
+            input_kwargs: Additional input-related arguments
+            output_kwargs: Additional output-related arguments
+
+        Returns:
+            Self for method chaining
+        """
         defalut_output_kwargs: FFKwargs = {
             "v": "error",
             "show_entries": "format=duration",
@@ -445,6 +614,16 @@ class FPRenderTasks(FPCreateRender):
         input_kwargs: FFKwargs | None = None,
         output_kwargs: FFKwargs | None = None,
     ) -> Self:
+        """Get the keyframe positions of a video file.
+
+        Args:
+            input_file: Path to the input file
+            input_kwargs: Additional input-related arguments
+            output_kwargs: Additional input-related arguments
+
+        Returns:
+            Self for method chaining
+        """
         defalut_output_kwargs: FFKwargs = {
             "v": "error",
             "select_streams": "v:0",
@@ -479,6 +658,16 @@ class FPRenderTasks(FPCreateRender):
         input_kwargs: FFKwargs | None = None,
         output_kwargs: FFKwargs | None = None,
     ) -> Self:
+        """Get the frames per second of a video file.
+
+        Args:
+            input_file: Path to the input file
+            input_kwargs: Additional input-related arguments
+            output_kwargs: Additional output-related arguments
+
+        Returns:
+            Self for method chaining
+        """
         defalut_output_kwargs: FFKwargs = {
             "v": "error",
             "select_streams": "v",
@@ -504,6 +693,15 @@ class FPRenderTasks(FPCreateRender):
 
 # FFMpeg taks base
 class FFCreateCommand(BaseModel):
+    """Base class for creating FFmpeg command configurations.
+
+    Attributes:
+        input_file: Path to the input file
+        output_file: Path to the output file or None to generate automatically
+        input_kwargs: Additional input-related arguments
+        output_kwargs: Additional output-related arguments
+    """
+
     input_file: Path | str = Path()
     output_file: Path | str | None = None
     input_kwargs: FFKwargs = Field(default_factory=dict)
@@ -511,6 +709,16 @@ class FFCreateCommand(BaseModel):
 
 
 class OptionFFRender(TypedDict):
+    """Type definition for optional render parameters.
+
+    Attributes:
+        task_descripton: Description of the task
+        delete_after: Whether to delete the input file after processing
+        exception: Exception information, if any
+        psot_task: Function to process results after command execution
+        return_result: Whether to return the command result rather than output file path
+    """
+
     task_descripton: NotRequired[str]
     delete_after: NotRequired[bool]
     exception: NotRequired[FFRenderException]
@@ -519,6 +727,16 @@ class OptionFFRender(TypedDict):
 
 
 class FFCreateTask(FFCreateCommand):
+    """Base class for creating and executing FFmpeg tasks.
+
+    Attributes:
+        task_descripton: Description of the task
+        delete_after: Whether to delete the input file after processing
+        exception: Exception information, if any
+        post_task: Function to process results after command execution
+        return_result: Whether to return the command result rather than output file path
+    """
+
     task_descripton: str = "render"
     delete_after: bool = False
     exception: FFRenderException | None = None
@@ -526,6 +744,14 @@ class FFCreateTask(FFCreateCommand):
     return_result: bool = False
 
     def override_option(self, options: OptionFFRender | None = None) -> Self:
+        """Override default options with provided values.
+
+        Args:
+            options: Dictionary of options to override
+
+        Returns:
+            Self for method chaining
+        """
         if options is not None:
             for k, v in options.items():
                 setattr(self, k, v)
@@ -533,6 +759,14 @@ class FFCreateTask(FFCreateCommand):
         return self
 
     def render(self) -> Any:
+        """Execute the FFmpeg command and process results.
+
+        Returns:
+            The result of the FFmpeg command or output file path
+
+        Raises:
+            Exception: If the FFmpeg command fails
+        """
         # Handle inout and output file path
         self.input_file = Path(self.input_file)
         self.output_file = _handle_output_file_path(
@@ -592,15 +826,26 @@ class FFCreateTask(FFCreateCommand):
 
 # Specific FFMpeg tasks implement
 class Custom(FFCreateTask):
+    """Class for custom FFmpeg tasks with user-specified parameters."""
+
     pass
 
 
 class Cut(FFCreateTask):
+    """Class for cutting a segment from a video file.
+
+    Attributes:
+        ss: Start time in format 'HH:MM:SS'
+        to: End time in format 'HH:MM:SS'
+        rerender: Whether to re-encode the video (True) or stream copy (False)
+    """
+
     ss: str = "00:00:00"
     to: str = "00:00:01"
     rerender: bool = False
 
     def model_post_init(self, *args, **kwargs) -> None:
+        """Initialize task description and output arguments after model creation."""
         self.task_descripton = f"{_TASKS.CUT}_{_convert_timestamp_to_seconds(self.ss)}-{_convert_timestamp_to_seconds(self.to)}"
         _defalut_output_kwargs: FFKwargs = {
             "ss": self.ss,
@@ -610,9 +855,16 @@ class Cut(FFCreateTask):
 
 
 class Speedup(FFCreateTask):
+    """Class for speeding up a video file.
+
+    Attributes:
+        multiple: Speed-up factor (e.g., 2 for double speed)
+    """
+
     multiple: float | int = DEFAULTS.speedup_multiple.value
 
     def model_post_init(self, *args, **kwargs):
+        """Initialize task description, output arguments, and handle error cases after model creation."""
         self.task_descripton = f"{_TASKS.SPEEDUP}_by_{self.multiple}"
         _defalut_output_kwargs: FFKwargs = _create_speedup_kwargs(self.multiple)
         if self.multiple == 1 and self.input_file != self.output_file:
@@ -629,12 +881,24 @@ class Speedup(FFCreateTask):
 
 
 class Jumpcut(FFCreateTask):
+    """Class for creating a jumpcut effect in a video.
+
+    A jumpcut alternates between segments at different speeds.
+
+    Attributes:
+        b1_duration: Duration of first part in seconds
+        b2_duration: Duration of second part in seconds
+        b1_multiple: Speed multiple for first part (0 = remove)
+        b2_multiple: Speed multiple for second part (0 = remove)
+    """
+
     b1_duration: float = 5
     b2_duration: float = 5
     b1_multiple: float = 1
     b2_multiple: float = 0
 
     def model_post_init(self, *args, **kwargs):
+        """Initialize task description, output arguments, and handle error cases after model creation."""
         self.task_descripton = f"{_TASKS.JUMPCUT}_b1({self.b1_duration}x{self.b1_multiple})_b2({self.b2_duration}x{self.b2_multiple})"
         _defalut_output_kwargs: FFKwargs = _create_jumpcut_kwargs(
             self.b1_duration, self.b2_duration, self.b1_multiple, self.b2_multiple
@@ -655,9 +919,16 @@ class Jumpcut(FFCreateTask):
 
 
 class Merge(FFCreateTask):
+    """Class for merging multiple video files into one.
+
+    Attributes:
+        input_dir_or_files: Directory containing videos or list of video files to merge
+    """
+
     input_dir_or_files: Path | str | list[Path] | list[str]
 
     def model_post_init(self, *args, **kwargs):
+        """Initialize task description, prepare input text file, and set cleanup post-task after model creation."""
         self.task_descripton = _TASKS.MERGE
         _defalut_input_kwargs: FFKwargs = {"f": "concat", "safe": 0}
         _defalut_output_kwargs: FFKwargs = {"c:a": "copy", "c:v": "copy"}
@@ -681,10 +952,18 @@ class Merge(FFCreateTask):
 
 
 class CutSilenceRerender(FFCreateTask):
+    """Class for cutting silent parts from a video with re-encoding.
+
+    Attributes:
+        dB: Audio threshold level in dB (negative number)
+        sampling_duration: Minimum silence duration to detect in seconds
+    """
+
     dB: int = DEFAULTS.db_threshold.value
     sampling_duration: float = DEFAULTS.sampling_duration.value
 
     def model_post_init(self, *args, **kwargs):
+        """Initialize task description, output arguments, and set cleanup post-task after model creation."""
         self.task_descripton = f"{_TASKS.CUT_SILENCE_RERENDER}_by_{self.dB}"
         _defalut_output_kwargs: FFKwargs = _create_cut_sl_kwargs(
             self.input_file, self.dB, self.sampling_duration
@@ -699,10 +978,18 @@ class CutSilenceRerender(FFCreateTask):
 
 
 class CutMotionlessRerender(FFCreateTask):
+    """Class for cutting motionless parts from a video with re-encoding.
+
+    Attributes:
+        threshold: Scene change threshold for identifying motion
+        sampling_duration: Duration between motion samples in seconds
+    """
+
     threshold: float = DEFAULTS.motionless_threshold.value
     sampling_duration: float = DEFAULTS.sampling_duration.value
 
     def model_post_init(self, *args, **kwargs):
+        """Initialize task description, output arguments, and set cleanup post-task after model creation."""
         self.task_descripton = f"{_TASKS.CUT_MOTIONLESS_RERENDER}_by_{self.threshold}"
         _defalut_output_kwargs: FFKwargs = _create_cut_motionless_kwargs(
             self.input_file, self.threshold, self.sampling_duration
@@ -718,10 +1005,18 @@ class CutMotionlessRerender(FFCreateTask):
 
 
 class SplitSegments(FFCreateTask):
+    """Class for splitting a video into multiple segments at specified times.
+
+    Attributes:
+        video_segments: List of timestamps to split at
+        output_dir: Directory to save split segments
+    """
+
     video_segments: list[str]
     output_dir: Optional[Path | str] = None
 
     def model_post_init(self, *args, **kwargs):
+        """Initialize task description, output directory, and handle empty segments case after model creation."""
         self.task_descripton = _TASKS.SPLIT
         self.input_file = Path(self.input_file)
         _defalut_output_kwargs: FFKwargs = {
@@ -757,10 +1052,18 @@ class SplitSegments(FFCreateTask):
 
 
 class _GetSilenceSegments(FFCreateTask):
+    """Internal class for detecting silent segments in a video.
+
+    Attributes:
+        dB: Audio threshold level in dB (negative number)
+        sampling_duration: Minimum silence duration to detect in seconds
+    """
+
     dB: int = DEFAULTS.db_threshold.value
     sampling_duration: float = DEFAULTS.sampling_duration.value
 
     def model_post_init(self, *args, **kwargs):
+        """Initialize task description and output arguments after model creation."""
         self.task_descripton = f"{_TASKS.GET_NON_SILENCE_SEGS}_by_{self.dB}"
         _defalut_output_kwargs: FFKwargs = {
             "af": f"silencedetect=n={self.dB}dB:d={self.sampling_duration}",
@@ -774,9 +1077,16 @@ class _GetSilenceSegments(FFCreateTask):
 
 
 class _GetMotionSegments(FFCreateTask):
+    """Internal class for detecting motion segments in a video.
+
+    Attributes:
+        sampling_duration: Duration between motion samples in seconds
+    """
+
     sampling_duration: float = DEFAULTS.sampling_duration.value
 
     def model_post_init(self, *args, **kwargs):
+        """Initialize task description and output arguments after model creation."""
         self.task_descripton = _TASKS.GET_MOTION_SEGS
         frame_per_second: str = FPRenderTasks().frame_per_s(self.input_file).render()
         _defalut_output_kwargs: FFKwargs = {
@@ -792,6 +1102,20 @@ class _GetMotionSegments(FFCreateTask):
 
 # keep or remove copy/rendering by split segs
 class KeepOrRemove(FFCreateTask):
+    """
+    Class for processing video segments by selectively keeping or removing them.
+
+    This class splits a video into segments based on provided timestamps,
+    then applies different processing methods to even and odd segments.
+    Segments can either be kept as-is, removed, or processed with a custom method.
+
+    Attributes:
+        video_segments: List of timestamps or seconds marking segment boundaries
+        even_further: Processing method for even-indexed segments (default: "remove")
+        odd_further: Processing method for odd-indexed segments (default: None/keep)
+        remove_temp_handle: Whether to remove temporary files after processing
+    """
+
     video_segments: list[str] | list[float]
     even_further: FurtherMethod = (
         "remove"  # For other segments, remove means remove, None means copy
@@ -802,6 +1126,7 @@ class KeepOrRemove(FFCreateTask):
     remove_temp_handle: bool = True
 
     def model_post_init(self, *args, **kwargs):
+        """Initialize the task description and handle file paths."""
         self.task_descripton = _TASKS.KEEP_OR_REMOVE
         # Handle input and output file path
         self.input_file = Path(self.input_file)
@@ -811,6 +1136,13 @@ class KeepOrRemove(FFCreateTask):
 
     @timing
     def render(self) -> Path | ERROR_CODE:  # type: ignore
+        """
+        Process the video by splitting it into segments and applying the specified methods.
+
+        Returns:
+            Path: Path to the output file
+            ERROR_CODE: In case of processing error
+        """
         logger.info(
             f"{self.task_descripton.capitalize()} {self.input_file} to {self.output_file} with {self.even_further = }, {self.odd_further = }."
         )
@@ -909,6 +1241,18 @@ type PortionMethod = (
 
 
 class PartitionVideo(FFCreateTask):
+    """
+    Class for dividing a video into multiple partitions with optional processing.
+
+    This class splits a video into multiple segments based on count or portion_method,
+    then applies specified processing methods to each segment.
+
+    Attributes:
+        count: Number of segments to create
+        portion_method: Custom method specifying segment sizes and processing
+        output_dir: Directory to save partitioned segments
+    """
+
     count: int = Field(
         default=0, gte=0
     )  # Easy way to create portion_method # type: ignore
@@ -916,6 +1260,9 @@ class PartitionVideo(FFCreateTask):
     output_dir: Path | str | None = None
 
     def model_post_init(self, *args, **kwargs):
+        """
+        Initialize the task description, handle file paths, and set default values.
+        """
         self.task_descripton = _TASKS.PARTITION
         # Handle input and output file path
         self.input_file = Path(self.input_file)
@@ -938,6 +1285,19 @@ class PartitionVideo(FFCreateTask):
     @field_validator("portion_method")
     @classmethod
     def validate_portion_sum(cls, portion_method: PortionMethod, info) -> PortionMethod:
+        """
+        Validate that the sum of portions in the portion_method matches the count.
+
+        Args:
+            portion_method: The method specifying segment sizes and processing
+            info: Additional validation information
+
+        Returns:
+            Validated portion_method
+
+        Raises:
+            ValueError: If sum of portions doesn't equal count
+        """
         # Validate portion_method
         if portion_method is not None:
             _portion_method: PortionMethod = [
@@ -955,6 +1315,14 @@ class PartitionVideo(FFCreateTask):
 
     @timing
     def render(self) -> Path | ERROR_CODE | int:  # type: ignore
+        """
+        Partition the video according to specified count and portion method.
+
+        Returns:
+            Path: Path to merged output file (if output_file is provided)
+            int: 0 on success without merging
+            ERROR_CODE: In case of processing error
+        """
         duration: float = FPRenderTasks().duration(self.input_file).render()
         video_segments: list[str] = _get_segments_from_parts_count(
             duration,
@@ -1044,6 +1412,20 @@ class PartitionVideo(FFCreateTask):
 
 
 class CutSilence(FFCreateTask):
+    """
+    Class for removing silent segments from a video.
+
+    This class identifies silent portions of a video based on audio levels,
+    then removes them or applies custom processing.
+
+    Attributes:
+        dB: Audio threshold level in dB for identifying silence
+        sampling_duration: Minimum duration of silence to detect
+        seg_min_duration: Minimum duration of segments to keep
+        even_further: Processing method for even segments (typically silence)
+        odd_further: Processing method for odd segments (typically non-silence)
+    """
+
     dB: int = DEFAULTS.db_threshold.value
     sampling_duration: float = DEFAULTS.sampling_duration.value
     seg_min_duration: float = DEFAULTS.seg_min_duration.value
@@ -1055,6 +1437,7 @@ class CutSilence(FFCreateTask):
     )
 
     def model_post_init(self, *args, **kwargs):
+        """Initialize the task description and handle file paths."""
         self.task_descripton = f"{_TASKS.CUT_SILENCE}_by_{self.dB}"
         # Handle input and output file path
         self.input_file = Path(self.input_file)
@@ -1064,6 +1447,13 @@ class CutSilence(FFCreateTask):
 
     @timing
     def render(self) -> Path | ERROR_CODE:  # type: ignore
+        """
+        Process the video by detecting and removing silent segments.
+
+        Returns:
+            Path: Path to the output file
+            ERROR_CODE: In case of processing error
+        """
         logger.info(
             f"{self.task_descripton.capitalize()} {self.input_file} to {self.output_file} with {self.dB = }, {self.sampling_duration = }, {self.seg_min_duration = }."
         )
@@ -1116,6 +1506,20 @@ class CutSilence(FFCreateTask):
 
 
 class CutMotionless(FFCreateTask):
+    """
+    Class for removing motionless segments from a video.
+
+    This class identifies motionless portions of a video based on scene analysis,
+    then removes them or applies custom processing.
+
+    Attributes:
+        threshold: Scene change threshold for identifying motion
+        sampling_duration: Duration between motion samples
+        seg_min_duration: Minimum duration of segments to keep
+        even_further: Processing method for even segments (typically motionless)
+        odd_further: Processing method for odd segments (typically motion)
+    """
+
     threshold: float = DEFAULTS.motionless_threshold.value
     sampling_duration: float = DEFAULTS.sampling_duration.value
     seg_min_duration: float = DEFAULTS.seg_min_duration.value
@@ -1127,6 +1531,7 @@ class CutMotionless(FFCreateTask):
     )
 
     def model_post_init(self, *args, **kwargs):
+        """Initialize the task description and handle file paths."""
         self.task_descripton = f"{_TASKS.CUT_MOTIONLESS}_by_{self.threshold}"
         # Handle input and output file path
         self.input_file = Path(self.input_file)
@@ -1136,6 +1541,13 @@ class CutMotionless(FFCreateTask):
 
     @timing
     def render(self) -> Path | ERROR_CODE:  # type: ignore
+        """
+        Process the video by detecting and removing motionless segments.
+
+        Returns:
+            Path: Path to the output file
+            ERROR_CODE: In case of processing error
+        """
         logger.info(
             f"{self.task_descripton.capitalize()} {self.input_file} to {self.output_file} with {self.threshold = }, {self.sampling_duration = }, {self.seg_min_duration = }."
         )
@@ -1192,6 +1604,20 @@ class CutMotionless(FFCreateTask):
 def _get_segments_from_parts_count(
     duration: float | str, parts_count: int, portion: Optional[list[int]] = None
 ) -> list[str]:
+    """
+    Calculate segment boundaries for partitioning a video.
+
+    Args:
+        duration: Total duration of the video in seconds or timestamp format
+        parts_count: Number of segments to create
+        portion: Optional list of relative segment sizes
+
+    Returns:
+        List of timestamp strings marking segment boundaries
+
+    Raises:
+        ValueError: If parts_count is not positive or portions don't sum to parts_count
+    """
     if parts_count <= 0:
         raise ValueError("parts_count must be greater than 0")
 
@@ -1231,6 +1657,19 @@ def _create_force_keyframes_kwargs(
 
 
 def _create_speedup_kwargs(multiple: float) -> dict[str, str]:
+    """Create FFmpeg filter arguments for video speed adjustment.
+
+    This function creates the necessary filter arguments for FFmpeg to change video playback speed.
+    It uses different approaches based on the speed multiple:
+    - For large multiples: Uses frame selection to skip frames
+    - For smaller multiples: Uses direct PTS (presentation timestamp) manipulation
+
+    Args:
+        multiple: Speed-up factor (e.g., 2 for double speed)
+
+    Returns:
+        Dictionary of FFmpeg filter arguments for speed adjustment
+    """
     SPEEDUP_task_THRESHOLD: int = DEFAULTS.speedup_task_threshold.value
     vf: str
     af: str
@@ -1260,6 +1699,20 @@ def _create_jumpcut_kwargs(
     b1_multiple: float,  # 0 means unwanted cut out
     b2_multiple: float,  # 0 means unwanted cut out
 ) -> dict[str, str]:
+    """Create FFmpeg filter arguments for jumpcut effect.
+
+    This function creates a filter configuration that alternates between two different
+    playback speeds in a cyclic pattern, creating a "jumpcut" effect.
+
+    Args:
+        b1_duration: Duration of first part in seconds
+        b2_duration: Duration of second part in seconds
+        b1_multiple: Speed multiple for first part (0 = remove)
+        b2_multiple: Speed multiple for second part (0 = remove)
+
+    Returns:
+        Dictionary of FFmpeg filter arguments for jumpcut effect
+    """
     interval_multiple_expr: str = (
         str(b1_multiple)
         if b1_multiple == 0
@@ -1293,6 +1746,21 @@ def _create_jumpcut_kwargs(
 def create_merge_txt(
     video_files_source: Path | list[Path], output_txt: Path | None = None
 ) -> Path:
+    """Create a text file listing video files for FFmpeg concatenation.
+
+    This function creates a text file containing 'file' entries for each video to be merged.
+    The text file follows the format required by FFmpeg's concat demuxer.
+
+    Args:
+        video_files_source: Directory containing videos or list of video files to merge
+        output_txt: Path where the text file should be created (default: temporary file)
+
+    Returns:
+        Path to the created text file
+
+    Raises:
+        ValueError: If video_files_source is not a directory or contains non-video files
+    """
     # Step 0: Set the output txt path
     if output_txt is None:
         temp_output_dir = Path(tempfile.mkdtemp(prefix=DEFAULTS.temp_dir_prefix.value))
@@ -1325,6 +1793,18 @@ def create_merge_txt(
 
 # Adjust segments
 class AdjustSegmentsConfig(BaseModel):
+    """Configuration model for segment adjustment operations.
+
+    This class defines the parameters needed when adjusting video segments,
+    such as aligning them with keyframes or ensuring minimum durations.
+
+    Attributes:
+        segments: List of timestamps marking segment boundaries (even indices are starts, odd indices are ends)
+        seg_min_duration: Minimum duration for each segment in seconds
+        total_duration: Total duration of the video in seconds
+        keyframes: List of keyframe positions in seconds
+    """
+
     segments: list[float]
     seg_min_duration: float = DEFAULTS.seg_min_duration.value
     total_duration: float
@@ -1336,18 +1816,19 @@ def _ensure_minimum_segment_length(
     seg_min_duration: float = DEFAULTS.seg_min_duration.value,
     total_duration: float | None = None,
 ) -> list[float]:
-    """
-    Ensures that every segment in the video_segments list is at least seg_min_duration seconds long.
+    """Ensures that every segment in the video_segments list is at least seg_min_duration seconds long.
 
     Args:
-        video_segments (list[float]): List of start and end times in seconds.
-        seg_min_duration (float, optional): Minimum duration for each segment in seconds. Defaults to 2.
+        video_segments: List of start and end times in seconds (even indices are starts, odd indices are ends)
+        seg_min_duration: Minimum duration for each segment in seconds
+        total_duration: Total duration of the video in seconds
 
     Raises:
-        ValueError: If video_segments does not contain pairs of start and end times.
+        ValueError: If video_segments does not contain pairs of start and end times
+        ValueError: If seg_min_duration is negative
 
     Returns:
-        list[float]: Updated list of start and end times with adjusted segment durations.
+        Updated list of start and end times with adjusted segment durations
     """
     if seg_min_duration == 0 or video_segments == []:
         return video_segments
@@ -1395,6 +1876,18 @@ def _ensure_minimum_segment_length(
 def _adjust_segments_to_keyframes(
     video_segments: list[float], keyframes_segments: list[float]
 ) -> list[float]:
+    """Adjust segment boundaries to align with nearest keyframes.
+
+    This function adjusts the start and end times of segments to align with keyframes,
+    which improves cutting precision and performance when processing videos.
+
+    Args:
+        video_segments: List of segment boundaries in seconds
+        keyframes_segments: List of keyframe positions in seconds
+
+    Returns:
+        List of adjusted segment boundaries aligned to keyframes
+    """
     adjusted_segments = []
     keyframe_index = 0
 
@@ -1428,13 +1921,16 @@ def _adjust_segments_to_keyframes(
 
 
 def _merge_overlapping_segments(segments: list[float]) -> list[float]:
-    """_summary_
+    """Merge segments that overlap with each other.
+
+    This function takes a list of segment start and end times, sorts them,
+    and merges any segments that overlap to create a list of non-overlapping segments.
 
     Args:
-        segments (list[float]): _description_
+        segments: List of segment start and end times in seconds
 
     Returns:
-        list[float]: _description_
+        List of merged non-overlapping segment boundaries
     """
     # Sort segments by start time
     sorted_segments = sorted(
@@ -1464,6 +1960,19 @@ def _merge_overlapping_segments(segments: list[float]) -> list[float]:
 def _adjust_segments_pipe(
     adjusted_segments_config: AdjustSegmentsConfig,
 ) -> list[float]:
+    """Process segments through a pipeline of adjustment operations.
+
+    This function applies a series of adjustments to video segments:
+    1. Ensures minimum segment length
+    2. Aligns segments to keyframes
+    3. Merges overlapping segments
+
+    Args:
+        adjusted_segments_config: Configuration parameters for segment adjustment
+
+    Returns:
+        List of processed segment boundaries
+    """
     logger.info(f"Segments to adjust: {adjusted_segments_config.segments}")
 
     ensured_minimum: list[float] = (
@@ -1493,6 +2002,16 @@ def _adjust_segments_pipe(
 
 # Create cut rerender filters
 class CSFiltersInfo(Enum):
+    """Enumeration of filter configurations for cutting segments.
+
+    This enum provides template configurations for generating video and audio
+    filter scripts used in FFmpeg segment cutting operations.
+
+    Attributes:
+        VIDEO: Configuration for video stream filtering
+        AUDIO: Configuration for audio stream filtering
+    """
+
     VIDEO = {
         "filename": f"temp_{time.strftime('%Y%m%d-%H%M%S')}_video_filter_",
         "texts": [
@@ -1513,6 +2032,18 @@ def _gen_cut_segs_filter(
     filter_texts: list[str],
     videoSectionTimings: list[float],
 ) -> Generator[str, None, None]:
+    """Generate filter expressions for cutting video segments.
+
+    This function yields lines of an FFmpeg filter script that selects
+    specific time ranges from a video.
+
+    Args:
+        filter_texts: Template texts for the filter expression
+        videoSectionTimings: List of segment start and end times
+
+    Yields:
+        Lines of the filter script
+    """
     yield filter_texts[0]
     yield from (
         f"between(t,{videoSectionTimings[i]},{videoSectionTimings[i + 1]})"
@@ -1526,6 +2057,18 @@ def _create_cut_segs_filter_tempfile(
     filter_info: CSFiltersInfo,
     videoSectionTimings: list[float],
 ) -> Path:
+    """Create a temporary file containing filter expressions for cutting segments.
+
+    This function generates a filter script file for FFmpeg that selects
+    specific time ranges from a video or audio stream.
+
+    Args:
+        filter_info: Filter configuration from CSFiltersInfo enum
+        videoSectionTimings: List of segment start and end times
+
+    Returns:
+        Path to the created temporary filter script file
+    """
     with tempfile.NamedTemporaryFile(
         delete=False, mode="w", encoding="UTF-8", prefix=filter_info.value["filename"]
     ) as temp_file:
@@ -1541,6 +2084,19 @@ def _create_cut_segs_filter_tempfile(
 def _extract_motion_info(
     motion_segs_str: str,
 ) -> tuple[dict[float, float], float]:
+    """Extract motion information from FFmpeg motion detection output.
+
+    This function parses the output of an FFmpeg scene detection operation
+    to extract timestamps and scene scores.
+
+    Args:
+        motion_segs_str: String output from FFmpeg motion detection
+
+    Returns:
+        Tuple containing:
+        - Dictionary mapping timestamps to scene scores
+        - Total duration of the video in seconds
+    """
     # Total duration
     total_duration_pattern = r"Duration: (.+?),"
     total_duration_match: str | None = re.findall(
@@ -1575,6 +2131,18 @@ def _extract_motion_segments(
     motion_info: dict[float, float],
     threshold: float = DEFAULTS.motionless_threshold.value,
 ) -> list[float]:
+    """Extract timestamps of transitions between motion and motionless segments.
+
+    This function analyzes motion scores to identify when the video
+    transitions between motion and motionless states, based on a threshold.
+
+    Args:
+        motion_info: Dictionary mapping timestamps to scene scores
+        threshold: Scene score threshold for detecting motion
+
+    Returns:
+        List of timestamps marking transitions between motion and motionless segments
+    """
     break_points = []
     prev_above = False  # Track if last added was above the threshold
 
@@ -1590,6 +2158,22 @@ def _extract_motion_segments(
 def _create_cut_motionless_kwargs(
     input_file: Path | str, threshold: float, sampling_duration: float
 ) -> dict:
+    """Create FFmpeg filter arguments for cutting motionless segments.
+
+    This function detects motionless portions of a video and creates
+    filter configurations to remove them.
+
+    Args:
+        input_file: Path to the input video file
+        threshold: Scene score threshold for detecting motion
+        sampling_duration: Duration between motion samples in seconds
+
+    Returns:
+        Dictionary of FFmpeg filter arguments for cutting motionless segments
+
+    Raises:
+        ValueError: If no valid segments are found
+    """
     motion_str: str = str(
         _GetMotionSegments(
             input_file=input_file, sampling_duration=sampling_duration
@@ -1622,6 +2206,20 @@ def _create_cut_motionless_kwargs(
 def _extract_non_silence_info(
     non_silence_segs_str: str,
 ) -> tuple[list[float], float, float]:
+    """Extract silence information from FFmpeg silence detection output.
+
+    This function parses the output of an FFmpeg silence detection operation
+    to extract timestamps of silent and non-silent segments.
+
+    Args:
+        non_silence_segs_str: String output from FFmpeg silence detection
+
+    Returns:
+        Tuple containing:
+        - List of timestamps marking silence transitions
+        - Total duration of the video in seconds
+        - Total duration of silence in seconds
+    """
     # Total duration
     total_duration_pattern = r"Duration: (.+?),"
     total_duration_match: str | None = re.findall(
@@ -1657,6 +2255,19 @@ def _extract_non_silence_info(
 def _create_cut_sl_kwargs(
     input_file: Path | str, dB: int, sampling_duration: float
 ) -> dict:
+    """Create FFmpeg filter arguments for cutting silent segments.
+
+    This function detects silent portions of a video and creates
+    filter configurations to remove them.
+
+    Args:
+        input_file: Path to the input video file
+        dB: Audio threshold level in dB for identifying silence
+        sampling_duration: Minimum duration of silence to detect
+
+    Returns:
+        Dictionary of FFmpeg filter arguments for cutting silent segments
+    """
     non_silence_str: str = str(
         _GetSilenceSegments(
             input_file=input_file, dB=dB, sampling_duration=sampling_duration
@@ -1677,6 +2288,23 @@ def _create_cut_sl_kwargs(
 
 
 class FF_TASKS(ClassEnum):
+    """Enumeration of available FFmpeg task classes.
+
+    This enum maps task identifiers to their implementing classes,
+    providing a consistent interface for accessing different processing operations.
+
+    Attributes:
+        Custom: For custom FFmpeg operations
+        Cut: For cutting segments from videos
+        Speedup: For changing video playback speed
+        Jumpcut: For creating jumpcut effects
+        CutSilence: For removing silent segments
+        CutSilenceRerender: For removing silent segments with re-encoding
+        CutMotionless: For removing motionless segments
+        CutMotionlessRerender: For removing motionless segments with re-encoding
+        PartitionVideo: For splitting videos into multiple parts
+    """
+
     Custom = Custom
     Cut = Cut
     Speedup = Speedup
@@ -1689,12 +2317,31 @@ class FF_TASKS(ClassEnum):
 
 
 class PARTIAL_TASKS(FunctionEnum):
+    """Collection of factory functions for creating partially configured task functions.
+
+    This class provides static methods that return functions pre-configured with
+    specific parameters, allowing for easier reuse of common configurations.
+
+    Each method returns a function that takes input_file and output_file parameters,
+    along with optional overrides.
+    """
+
     @staticmethod
     def speedup(
         multiple: float | int = DEFAULTS.speedup_multiple.value,
         input_kwargs: FFKwargs | None = None,
         output_kwargs: FFKwargs | None = None,
     ):
+        """Create a partially configured speedup function.
+
+        Args:
+            multiple: Speed-up factor (e.g., 2 for double speed)
+            input_kwargs: Additional input-related arguments
+            output_kwargs: Additional output-related arguments
+
+        Returns:
+            Function that applies the speedup effect when called with input and output files
+        """
         return _partial_render_task(
             task=FF_TASKS.Speedup,
             multiple=multiple,
@@ -1711,6 +2358,19 @@ class PARTIAL_TASKS(FunctionEnum):
         input_kwargs: FFKwargs | None = None,
         output_kwargs: FFKwargs | None = None,
     ):
+        """Create a partially configured jumpcut function.
+
+        Args:
+            b1_duration: Duration of first part in seconds
+            b2_duration: Duration of second part in seconds
+            b1_multiple: Speed multiple for first part (0 = remove)
+            b2_multiple: Speed multiple for second part (0 = remove)
+            input_kwargs: Additional input-related arguments
+            output_kwargs: Additional output-related arguments
+
+        Returns:
+            Function that applies the jumpcut effect when called with input and output files
+        """
         return _partial_render_task(
             task=FF_TASKS.Jumpcut,
             b1_duration=b1_duration,
@@ -1726,6 +2386,15 @@ class PARTIAL_TASKS(FunctionEnum):
         input_kwargs: FFKwargs | None = None,
         output_kwargs: FFKwargs | None = None,
     ):
+        """Create a partially configured custom FFmpeg function.
+
+        Args:
+            input_kwargs: Input-related arguments
+            output_kwargs: Output-related arguments
+
+        Returns:
+            Function that applies custom FFmpeg processing when called with input and output files
+        """
         return _partial_render_task(
             task=FF_TASKS.Custom,
             input_kwargs=input_kwargs or {},
@@ -1740,6 +2409,18 @@ class PARTIAL_TASKS(FunctionEnum):
         input_kwargs: FFKwargs | None = None,
         output_kwargs: FFKwargs | None = None,
     ):
+        """Create a partially configured cut function.
+
+        Args:
+            ss: Start time in format 'HH:MM:SS'
+            to: End time in format 'HH:MM:SS'
+            rerender: Whether to re-encode the video (True) or stream copy (False)
+            input_kwargs: Additional input-related arguments
+            output_kwargs: Additional output-related arguments
+
+        Returns:
+            Function that cuts the video when called with input and output files
+        """
         return _partial_render_task(
             task=FF_TASKS.Cut,
             ss=ss,
@@ -1756,6 +2437,17 @@ class PARTIAL_TASKS(FunctionEnum):
         input_kwargs: FFKwargs | None = None,
         output_kwargs: FFKwargs | None = None,
     ):
+        """Create a partially configured silence cutting function with re-encoding.
+
+        Args:
+            dB: Audio threshold level in dB for identifying silence
+            sampling_duration: Minimum duration of silence to detect
+            input_kwargs: Additional input-related arguments
+            output_kwargs: Additional output-related arguments
+
+        Returns:
+            Function that removes silent segments with re-encoding when called with input and output files
+        """
         return _partial_render_task(
             task=FF_TASKS.CutSilenceRerender,
             dB=dB,
@@ -1771,7 +2463,19 @@ class PARTIAL_TASKS(FunctionEnum):
         seg_min_duration: float = DEFAULTS.seg_min_duration.value,
         even_further: FurtherMethod = "remove",  # For other segments, remove means remove, None means copy
         odd_further: FurtherMethod = None,
-    ):  # For segments, remove means remove, None means copy
+    ):
+        """Create a partially configured silence cutting function.
+
+        Args:
+            dB: Audio threshold level in dB for identifying silence
+            sampling_duration: Minimum duration of silence to detect
+            seg_min_duration: Minimum duration of segments to keep
+            even_further: Processing method for even segments (typically silence)
+            odd_further: Processing method for odd segments (typically non-silence)
+
+        Returns:
+            Function that removes silent segments when called with input and output files
+        """
         return _partial_render_task(
             task=FF_TASKS.CutSilence,
             dB=dB,
@@ -1789,6 +2493,18 @@ class PARTIAL_TASKS(FunctionEnum):
         even_further: FurtherMethod = "remove",  # For other segments, remove means remove, None means copy
         odd_further: FurtherMethod = None,  # For segments, remove means remove, None means copy
     ):
+        """Create a partially configured motionless cutting function.
+
+        Args:
+            threshold: Scene change threshold for identifying motion
+            sampling_duration: Duration between motion samples
+            seg_min_duration: Minimum duration of segments to keep
+            even_further: Processing method for even segments (typically motionless)
+            odd_further: Processing method for odd segments (typically motion)
+
+        Returns:
+            Function that removes motionless segments when called with input and output files
+        """
         return _partial_render_task(
             task=FF_TASKS.CutMotionless,
             threshold=threshold,
@@ -1803,6 +2519,15 @@ class PARTIAL_TASKS(FunctionEnum):
         threshold: float = DEFAULTS.motionless_threshold.value,
         sampling_duration: float = DEFAULTS.sampling_duration.value,
     ):
+        """Create a partially configured motionless cutting function with re-encoding.
+
+        Args:
+            threshold: Scene change threshold for identifying motion
+            sampling_duration: Duration between motion samples
+
+        Returns:
+            Function that removes motionless segments with re-encoding when called with input and output files
+        """
         return _partial_render_task(
             task=FF_TASKS.CutMotionlessRerender,
             threshold=threshold,
@@ -1815,6 +2540,16 @@ class PARTIAL_TASKS(FunctionEnum):
         portion_method: PortionMethod | None = None,  # Main logic for partitioning
         output_dir: Path | str | None = None,
     ):
+        """Create a partially configured video partitioning function.
+
+        Args:
+            count: Number of segments to create
+            portion_method: Custom method specifying segment sizes and processing
+            output_dir: Directory to save partitioned segments
+
+        Returns:
+            Function that partitions the video when called with input and output files
+        """
         return _partial_render_task(
             task=FF_TASKS.PartitionVideo,
             count=count,
@@ -1828,6 +2563,19 @@ def _partial_render_task(
     task: FF_TASKS,
     **config,
 ) -> Callable[[str | Path, str | Path, OptionFFRender | None], Any]:
+    """Create a partially configured task function with the given configuration.
+
+    This is a factory function that creates partially applied functions for
+    specific FFmpeg tasks, allowing reuse of common configurations.
+
+    Args:
+        task: The task class to instantiate
+        **config: Configuration parameters for the task
+
+    Returns:
+        A function that takes input_file, output_file, and optional overrides
+    """
+
     def _partial(
         input_file: str | Path,
         output_file: str | Path,
