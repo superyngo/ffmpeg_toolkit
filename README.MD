@@ -12,7 +12,7 @@ pip install ffmpeg-toolkit
 
 ### Basic Usage
 
-The toolkit can be used both as a command-line tool and as a Python library.
+The toolkit can be used as a Python library.
 
 ### Python Library Usage
 (Written by Chatpgt so use follow with cautions)
