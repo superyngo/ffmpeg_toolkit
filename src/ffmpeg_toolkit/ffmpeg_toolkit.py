@@ -12,7 +12,6 @@ from enum import Enum, StrEnum, auto
 from functools import wraps
 from itertools import accumulate
 from pathlib import Path
-from types import MethodType, FunctionType
 from typing import (
     Any,
     Callable,
@@ -42,12 +41,11 @@ except ImportError:
 from pydantic import BaseModel, Field, field_validator
 
 # Local imports
-from .ffmpeg_types import EncodeKwargs, VideoSuffix, FFKwargs, FunctionEnum
+from .ffmpeg_types import EncodeKwargs, VideoSuffix, FFKwargs, FunctionEnum, ClassEnum
 
 # import ffmpeg
 # basic
-type FurtherRenderTask = Callable[..., Any] | PARTIAL_TASKS
-type FurtherMethod = FurtherRenderTask | Literal["remove"] | None
+type FurtherMethod = PARTIAL_TASKS | Literal["remove"] | None
 
 
 class DEFAULTS(Enum):
@@ -782,7 +780,7 @@ class _GetMotionSegments(FFCreateTask):
         self.task_descripton = _TASKS.GET_MOTION_SEGS
         frame_per_second: str = FPRenderTasks().frame_per_s(self.input_file).render()
         _defalut_output_kwargs: FFKwargs = {
-            "vf": f"select='not(mod(n,floor({frame_per_second})*{self.sampling_duration}))*gte(scene,0)',metadata=print",
+            "vf": f"select='not(mod(n,floor({frame_per_second}*{self.sampling_duration})))*gte(scene,0)',metadata=print",
             "an": "",
             "loglevel": "info",
             "f": "null",
@@ -900,11 +898,11 @@ class KeepOrRemove(FFCreateTask):
 
 # Partitioning
 type PortionMethod = (
-    list[tuple[int, FurtherRenderTask]]
+    list[tuple[int, FurtherMethod]]
     | list[
         int
         | tuple[int, None]
-        | tuple[int, FurtherRenderTask]
+        | tuple[int, FurtherMethod]
         | tuple[int, Literal["remove"]]
     ]
 )
@@ -980,7 +978,7 @@ class PartitionVideo(FFCreateTask):
             ).render()
 
             video_files: list[Path] = sorted(
-                temp_dir.glob(f"*{self.input_file.suffix}"),
+                temp_dir.glob(f"*{self.input_file.suffix}"),  # type: ignore
                 key=lambda video_file: int(video_file.stem.split("_")[0]),
             )
 
@@ -991,9 +989,9 @@ class PartitionVideo(FFCreateTask):
                 max_workers=DEFAULTS.num_cores.value
             ) as executor:
                 for video in video_files:
-                    seg_output_file: Path = self.output_dir / video.name
+                    seg_output_file: Path = self.output_dir / video.name  # type: ignore
                     index = int(video.stem.split("_")[0])
-                    further_method: FurtherMethod = self.portion_method[index][1]
+                    further_method: FurtherMethod = self.portion_method[index][1]  # type: ignore
 
                     if further_method == "remove":
                         os.remove(video)
@@ -1026,7 +1024,9 @@ class PartitionVideo(FFCreateTask):
 
             if self.output_file is not None:
                 self.output_file = _handle_output_file_path(
-                    self.input_file, self.output_file, self.task_descripton
+                    self.input_file,  # type: ignore
+                    self.output_file,
+                    self.task_descripton,
                 )
                 Merge(
                     input_dir_or_files=new_video_files,
@@ -1063,7 +1063,7 @@ class CutSilence(FFCreateTask):
         )
 
     @timing
-    def render(self) -> Path | ERROR_CODE:
+    def render(self) -> Path | ERROR_CODE:  # type: ignore
         logger.info(
             f"{self.task_descripton.capitalize()} {self.input_file} to {self.output_file} with {self.dB = }, {self.sampling_duration = }, {self.seg_min_duration = }."
         )
@@ -1079,7 +1079,6 @@ class CutSilence(FFCreateTask):
         non_silence_segments, total_duration, _ = _extract_non_silence_info(
             non_silence_str
         )
-        logger.info(f"{non_silence_segments = }")
 
         # Extract keyframes
         keyframes = FPRenderTasks().keyframes(self.input_file).render()
@@ -1107,7 +1106,7 @@ class CutSilence(FFCreateTask):
                 odd_further=self.odd_further,
                 delete_after=self.delete_after,
             ).render()
-            return self.output_file
+            return self.output_file  # type: ignore
 
         except Exception as e:
             logger.error(
@@ -1136,7 +1135,7 @@ class CutMotionless(FFCreateTask):
         )
 
     @timing
-    def render(self) -> Path | ERROR_CODE:
+    def render(self) -> Path | ERROR_CODE:  # type: ignore
         logger.info(
             f"{self.task_descripton.capitalize()} {self.input_file} to {self.output_file} with {self.threshold = }, {self.sampling_duration = }, {self.seg_min_duration = }."
         )
@@ -1150,7 +1149,6 @@ class CutMotionless(FFCreateTask):
         )
         motion_info, total_duration = _extract_motion_info(motion_str)
         motion_segments = _extract_motion_segments(motion_info, self.threshold)
-
         if motion_segments == [0.0]:
             logger.error(f"No valid segments found for {self.input_file}.")
             return ERROR_CODE.NO_VALID_SEGMENTS
@@ -1181,7 +1179,7 @@ class CutMotionless(FFCreateTask):
                 odd_further=self.odd_further,
                 delete_after=self.delete_after,
             ).render()
-            return self.output_file
+            return self.output_file  # type: ignore
 
         except Exception as e:
             logger.error(
@@ -1466,6 +1464,8 @@ def _merge_overlapping_segments(segments: list[float]) -> list[float]:
 def _adjust_segments_pipe(
     adjusted_segments_config: AdjustSegmentsConfig,
 ) -> list[float]:
+    logger.info(f"Segments to adjust: {adjusted_segments_config.segments}")
+
     ensured_minimum: list[float] = (
         _ensure_minimum_segment_length(
             adjusted_segments_config.segments,
@@ -1676,23 +1676,16 @@ def _create_cut_sl_kwargs(
     }
 
 
-# Partial tasks
-def _partial_render_task(
-    task: MethodType | FunctionType | Callable,
-    **config,
-) -> FurtherRenderTask:
-    def _partial(
-        input_file: str | Path,
-        output_file: str | Path,
-        options: OptionFFRender | None = None,
-    ) -> Any:
-        return (
-            task(input_file=input_file, output_file=output_file, **config)
-            .override_option(options=options)
-            .render()
-        )
-
-    return _partial
+class FF_TASKS(ClassEnum):
+    Custom = Custom
+    Cut = Cut
+    Speedup = Speedup
+    Jumpcut = Jumpcut
+    CutSilence = CutSilence
+    CutSilenceRerender = CutSilenceRerender
+    CutMotionless = CutMotionless
+    CutMotionlessRerender = CutMotionlessRerender
+    PartitionVideo = PartitionVideo
 
 
 class PARTIAL_TASKS(FunctionEnum):
@@ -1703,7 +1696,7 @@ class PARTIAL_TASKS(FunctionEnum):
         output_kwargs: FFKwargs | None = None,
     ):
         return _partial_render_task(
-            task=Speedup,
+            task=FF_TASKS.Speedup,
             multiple=multiple,
             input_kwargs=input_kwargs or {},
             output_kwargs=output_kwargs or {},
@@ -1719,7 +1712,7 @@ class PARTIAL_TASKS(FunctionEnum):
         output_kwargs: FFKwargs | None = None,
     ):
         return _partial_render_task(
-            task=Jumpcut,
+            task=FF_TASKS.Jumpcut,
             b1_duration=b1_duration,
             b2_duration=b2_duration,
             b1_multiple=b1_multiple,
@@ -1734,7 +1727,7 @@ class PARTIAL_TASKS(FunctionEnum):
         output_kwargs: FFKwargs | None = None,
     ):
         return _partial_render_task(
-            task=Custom,
+            task=FF_TASKS.Custom,
             input_kwargs=input_kwargs or {},
             output_kwargs=output_kwargs or {},
         )
@@ -1748,7 +1741,7 @@ class PARTIAL_TASKS(FunctionEnum):
         output_kwargs: FFKwargs | None = None,
     ):
         return _partial_render_task(
-            task=Cut,
+            task=FF_TASKS.Cut,
             ss=ss,
             to=to,
             rerender=rerender,
@@ -1764,7 +1757,7 @@ class PARTIAL_TASKS(FunctionEnum):
         output_kwargs: FFKwargs | None = None,
     ):
         return _partial_render_task(
-            task=CutSilenceRerender,
+            task=FF_TASKS.CutSilenceRerender,
             dB=dB,
             sampling_duration=sampling_duration,
             input_kwargs=input_kwargs or {},
@@ -1780,7 +1773,7 @@ class PARTIAL_TASKS(FunctionEnum):
         odd_further: FurtherMethod = None,
     ):  # For segments, remove means remove, None means copy
         return _partial_render_task(
-            task=CutSilence,
+            task=FF_TASKS.CutSilence,
             dB=dB,
             sampling_duration=sampling_duration,
             seg_min_duration=seg_min_duration,
@@ -1797,7 +1790,7 @@ class PARTIAL_TASKS(FunctionEnum):
         odd_further: FurtherMethod = None,  # For segments, remove means remove, None means copy
     ):
         return _partial_render_task(
-            task=CutMotionless,
+            task=FF_TASKS.CutMotionless,
             threshold=threshold,
             sampling_duration=sampling_duration,
             seg_min_duration=seg_min_duration,
@@ -1811,7 +1804,7 @@ class PARTIAL_TASKS(FunctionEnum):
         sampling_duration: float = DEFAULTS.sampling_duration.value,
     ):
         return _partial_render_task(
-            task=CutMotionlessRerender,
+            task=FF_TASKS.CutMotionlessRerender,
             threshold=threshold,
             sampling_duration=sampling_duration,
         )
@@ -1823,8 +1816,27 @@ class PARTIAL_TASKS(FunctionEnum):
         output_dir: Path | str | None = None,
     ):
         return _partial_render_task(
-            task=PartitionVideo,
+            task=FF_TASKS.PartitionVideo,
             count=count,
             portion_method=portion_method,
             output_dir=output_dir,
         )
+
+
+# Partial tasks
+def _partial_render_task(
+    task: FF_TASKS,
+    **config,
+) -> Callable[[str | Path, str | Path, OptionFFRender | None], Any]:
+    def _partial(
+        input_file: str | Path,
+        output_file: str | Path,
+        options: OptionFFRender | None = None,
+    ) -> Any:
+        return (
+            task.value(input_file=input_file, output_file=output_file, **config)
+            .override_option(options=options)
+            .render()
+        )
+
+    return _partial

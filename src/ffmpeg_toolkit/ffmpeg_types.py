@@ -22,6 +22,23 @@ class FunctionEnum(Enum):
         return self.value
 
 
+class ClassEnum(Enum):
+    @classmethod
+    def register(cls, name, class_type, *args, **kwargs):
+        if not isinstance(class_type, type):
+            raise TypeError("Only classes can be registered.")
+
+        partial_class = partial(class_type, *args, **kwargs)
+        new_enum = Enum(
+            cls.__name__, {**{e.name: e.value for e in cls}, name: partial_class}
+        )
+        cls._member_map_.update(new_enum._member_map_)
+
+    def __call__(self, *args, **kwargs):
+        # If the value is callable, invoke it to create a new instance
+        return self.value(*args, **kwargs)
+
+
 class EncodeKwargs(TypedDict):
     video_track_timescale: NotRequired[int]
     vcodec: NotRequired[str]

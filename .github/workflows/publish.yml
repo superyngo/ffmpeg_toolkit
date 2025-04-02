@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+    paths:
+      - setup.py # 只有 setup.py 檔案變動時才觸發
 
 permissions:
   contents: read
