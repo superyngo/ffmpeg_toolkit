@@ -15,9 +15,9 @@ bin_path = current_file_path.parent / "bin"
 os.environ["PATH"] = a = str(bin_path) + os.pathsep + os.environ["PATH"]
 
 
-input_file = Path(r"C:\Users\user\Downloads\2031-12-12_1954875155_merged.mkv")
+input_file = Path(r"C:\Users\user\Downloads\input_merge.mkv")
 # input_file = Path(r"C:\Users\user\Downloads\IMG_2078.mp4")
-dir = Path(r"C:\Users\user\AppData\Local\Temp\tmpsn52hpxj")
+dir = Path(r"C:\Users\user\Downloads")
 
 jumpcut_args = {
     # "input_file": input_file,
@@ -68,6 +68,10 @@ portion_method1 = [
     # ),
 ]
 
+# ffmpeg_toolkit.FF_TASKS.Merge(
+#     input_dir_or_files=dir, output_file=dir / "o.mkv"
+# ).render()
+
 # ffmpeg_toolkit.PartitionVideo(
 #     input_file=input_file,
 #     output_file=input_file.parent,
@@ -75,10 +79,11 @@ portion_method1 = [
 #     output_dir=input_file.parent / "can",
 # ).render()
 
-ffmpeg_toolkit.FF_TASKS.cut_motionless(
+ffmpeg_toolkit.FF_TASKS.CutMotionless(
     input_file=input_file,
-    output_file=input_file,
+    dB=-35,
+    # output_file=input_file,
     even_further=PARTIAL_TASKS.cut_motionless(),
-    odd_further=PARTIAL_TASKS.cut_silence(),
+    odd_further=PARTIAL_TASKS.cut_silence(dB=-30),
 ).render()
 # code.interact(local=globals())

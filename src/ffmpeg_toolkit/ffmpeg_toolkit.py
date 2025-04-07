@@ -81,7 +81,7 @@ class DEFAULTS(Enum):
     motionless_threshold = 0.0095
     sampling_duration = 0.2
     seg_min_duration = 0
-    temp_dir_prefix = "ffmpeg_toolkit_"
+    temp_prefix = "ffmpeg_toolkit_tmp_"
 
 
 class ERROR_CODE(Enum):
@@ -90,6 +90,7 @@ class ERROR_CODE(Enum):
     DURATION_LESS_THAN_ZERO = auto()
     NO_VALID_SEGMENTS = auto()
     FAILED_TO_CUT = auto()
+    NO_VIDEO_SEGMENTS = auto()
 
 
 def timing(func: Callable):
@@ -1138,9 +1139,7 @@ class KeepOrRemove(FFCreateTask):
 
         try:
             # Split videos
-            temp_dir: Path = Path(
-                tempfile.mkdtemp(prefix=DEFAULTS.temp_dir_prefix.value)
-            )
+            temp_dir: Path = Path(tempfile.mkdtemp(prefix=DEFAULTS.temp_prefix.value))
             SplitSegments(
                 input_file=self.input_file,
                 video_segments=video_segments,
@@ -1192,6 +1191,9 @@ class KeepOrRemove(FFCreateTask):
                 temp_dir.glob(f"*{self.input_file.suffix}"),  # type: ignore
                 key=lambda video_file: int(video_file.stem.split("_")[0]),
             )
+            if len(rendered_video_files) == 0:
+                logger.error("No video segments to merge.")
+                return ERROR_CODE.NO_VIDEO_SEGMENTS
             Merge(
                 input_dir_or_files=rendered_video_files, output_file=self.output_file
             ).render()
@@ -1320,9 +1322,7 @@ class PartitionVideo(FFCreateTask):
 
         try:
             # Split videos
-            temp_dir: Path = Path(
-                tempfile.mkdtemp(prefix=DEFAULTS.temp_dir_prefix.value)
-            )
+            temp_dir: Path = Path(tempfile.mkdtemp(prefix=DEFAULTS.temp_prefix.value))
             SplitSegments(
                 input_file=self.input_file,
                 video_segments=video_segments,
@@ -1567,7 +1567,6 @@ class CutMotionless(FFCreateTask):
         if adjusted_segments == []:
             logger.error(f"No valid segments found for {self.input_file}.")
             return ERROR_CODE.NO_VALID_SEGMENTS
-
         try:
             # Perform advanced keep or remove by split segments
             KeepOrRemove(
@@ -1750,7 +1749,7 @@ def create_merge_txt(
     """
     # Step 0: Set the output txt path
     if output_txt is None:
-        temp_output_dir = Path(tempfile.mkdtemp(prefix=DEFAULTS.temp_dir_prefix.value))
+        temp_output_dir = Path(tempfile.mkdtemp(prefix=DEFAULTS.temp_prefix.value))
         output_txt = temp_output_dir / "input.txt"
 
     if isinstance(video_files_source, Path):
@@ -2056,7 +2055,10 @@ def _create_cut_segs_filter_tempfile(
         Path to the created temporary filter script file
     """
     with tempfile.NamedTemporaryFile(
-        delete=False, mode="w", encoding="UTF-8", prefix=filter_info.value["filename"]
+        delete=False,
+        mode="w",
+        encoding="UTF-8",
+        prefix=DEFAULTS.temp_prefix.value + filter_info.value["filename"],
     ) as temp_file:
         for line in _gen_cut_segs_filter(
             filter_info.value["texts"], videoSectionTimings
@@ -2363,6 +2365,7 @@ class FF_TASKS(ClassEnum):
         ```
     """
 
+    Merge = Merge
     Custom = Custom
     Cut = Cut
     Speedup = Speedup
