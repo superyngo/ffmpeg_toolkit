@@ -53,11 +53,19 @@ except ImportError:
 from pydantic import BaseModel, Field, field_validator
 
 # Local imports
-from .ffmpeg_types import EncodeKwargs, VideoSuffix, FFKwargs, FunctionEnum, ClassEnum
+from .ffmpeg_types import (
+    EncodeKwargs,
+    VideoSuffix,
+    FFKwargs,
+    FunctionEnum,
+    ClassEnum,
+    FFRenderException,
+    OptionFFRender,
+)
 
 # import ffmpeg
 # basic
-type FurtherMethod = PARTIAL_TASKS | Literal["remove"] | None
+type FurtherMethod = PARTIAL_TASK | Literal["remove"] | None
 
 
 class DEFAULTS(Enum):
@@ -360,14 +368,6 @@ def _handle_output_file_path(
     return output_file
 
 
-class FFRenderException(TypedDict):
-    """Type definition for render exceptions, providing code, message, and optional hook."""
-
-    code: int
-    message: str
-    hook: NotRequired[Callable[[], Any]]
-
-
 # FFProbe taks
 class FPCreateCommand(BaseModel):
     """Base class for creating FFprobe command configurations.
@@ -539,7 +539,7 @@ class FPRenderTasks(FPCreateRender):
         Args:
             input_file: Path to the input file to validate
             input_kwargs: Additional input-related arguments
-            output_kwargs: Additional output-related arguments
+            output_kwargs: Additional input-related arguments
 
         Returns:
             Self for method chaining
@@ -706,24 +706,6 @@ class FFCreateCommand(BaseModel):
     output_file: Path | str | None = None
     input_kwargs: FFKwargs = Field(default_factory=dict)
     output_kwargs: FFKwargs = Field(default_factory=dict)
-
-
-class OptionFFRender(TypedDict):
-    """Type definition for optional render parameters.
-
-    Attributes:
-        task_descripton: Description of the task
-        delete_after: Whether to delete the input file after processing
-        exception: Exception information, if any
-        psot_task: Function to process results after command execution
-        return_result: Whether to return the command result rather than output file path
-    """
-
-    task_descripton: NotRequired[str]
-    delete_after: NotRequired[bool]
-    exception: NotRequired[FFRenderException]
-    psot_task: NotRequired[Callable[..., Any]]
-    return_result: NotRequired[bool]
 
 
 class FFCreateTask(FFCreateCommand):
@@ -1100,6 +1082,7 @@ class _GetMotionSegments(FFCreateTask):
         self.return_result = True
 
 
+# Override render
 # keep or remove copy/rendering by split segs
 class KeepOrRemove(FFCreateTask):
     """
@@ -1135,7 +1118,7 @@ class KeepOrRemove(FFCreateTask):
         )
 
     @timing
-    def render(self) -> Path | ERROR_CODE:  # type: ignore
+    def render(self) -> Path | ERROR_CODE:  # type:ignore
         """
         Process the video by splitting it into segments and applying the specified methods.
 
@@ -1228,18 +1211,22 @@ class KeepOrRemove(FFCreateTask):
             raise e
 
 
-# Partitioning
+# Partitioning video
 type PortionMethod = (
-    list[tuple[int, FurtherMethod]]
+    list[int]
+    | list[tuple[int, None]]
+    | list[tuple[int, PARTIAL_TASK]]
+    | list[tuple[int, Literal["remove"]]]
     | list[
         int
         | tuple[int, None]
-        | tuple[int, FurtherMethod]
+        | tuple[int, PARTIAL_TASK]
         | tuple[int, Literal["remove"]]
     ]
 )
 
 
+# Override render
 class PartitionVideo(FFCreateTask):
     """
     Class for dividing a video into multiple partitions with optional processing.
@@ -1304,8 +1291,6 @@ class PartitionVideo(FFCreateTask):
                 (p, None) if isinstance(p, int) else p for p in portion_method
             ]
             _sum = sum(p[0] for p in _portion_method)  # type: ignore
-            logger.info(f"{info=}")
-            logger.info(f"{info.data=}")
             _count = info.data["count"]
             if _count != 0 and _sum != _count:
                 raise ValueError(
@@ -1411,6 +1396,7 @@ class PartitionVideo(FFCreateTask):
             raise e
 
 
+# Override render
 class CutSilence(FFCreateTask):
     """
     Class for removing silent segments from a video.
@@ -1505,6 +1491,7 @@ class CutSilence(FFCreateTask):
             raise e
 
 
+# Override render
 class CutMotionless(FFCreateTask):
     """
     Class for removing motionless segments from a video.
@@ -1900,7 +1887,7 @@ def _adjust_segments_to_keyframes(
             ):
                 keyframe_index += 1
             adjusted_time = (
-                keyframes_segments[keyframe_index - 1] if keyframe_index > 0 else time
+                keyframes_segments[keyframe_index - 1] if keyframe_index > 0 else _time
             )
             adjusted_segments.append(adjusted_time)
         else:  # end time
@@ -1941,7 +1928,6 @@ def _merge_overlapping_segments(segments: list[float]) -> list[float]:
 
     merged_segments = []
     current_start, current_end = sorted_segments[0]
-
     for start, end in sorted_segments[1:]:
         if start <= current_end:
             # Overlapping segments, merge them
@@ -2303,35 +2289,201 @@ class FF_TASKS(ClassEnum):
         CutMotionless: For removing motionless segments
         CutMotionlessRerender: For removing motionless segments with re-encoding
         PartitionVideo: For splitting videos into multiple parts
+
+    Examples:
+        Basic usage with default parameters:
+        ```python
+        from ffmpeg_toolkit import FF_TASKS
+        from pathlib import Path
+
+        # Speed up a video by the default factor (2x)
+        FF_TASKS.Speedup(
+            input_file=Path("input.mp4"),
+            output_file=Path("output_2x.mp4")
+        ).render()
+
+        # Cut a segment from a video
+        FF_TASKS.Cut(
+            input_file=Path("input.mp4"),
+            output_file=Path("cut_segment.mp4"),
+            ss="00:01:30",  # Start time
+            to="00:02:45"   # End time
+        ).render()
+        ```
+
+        Customizing task parameters:
+        ```python
+        # Remove silent parts with custom threshold
+        FF_TASKS.CutSilence(
+            input_file=Path("input.mp4"),
+            output_file=Path("no_silence.mp4"),
+            dB=-30,  # More sensitive silence detection
+            sampling_duration=0.5  # Check for silence every half second
+        ).render()
+
+        # Create a jumpcut effect that keeps normal speed sections
+        # and removes sections in between
+        FF_TASKS.Jumpcut(
+            input_file=Path("input.mp4"),
+            output_file=Path("jumpcut.mp4"),
+            b1_duration=3,  # 3 seconds of normal speed
+            b2_duration=2,  # 2 seconds to skip
+            b1_multiple=1,  # Keep normal speed
+            b2_multiple=0   # Remove these sections
+        ).render()
+        ```
+
+        Chaining operations with callbacks:
+        ```python
+        # First cut out a segment, then speed it up
+        segment = FF_TASKS.Cut(
+            input_file=Path("input.mp4"),
+            ss="00:01:00",
+            to="00:02:00"
+        ).render()
+
+        FF_TASKS.Speedup(
+            input_file=segment,
+            output_file=Path("cut_and_speedup.mp4"),
+            multiple=4  # 4x speed
+        ).render()
+        ```
+
+        Partition a video into multiple segments with different processing:
+        ```python
+        FF_TASKS.PartitionVideo(
+            input_file=Path("input.mp4"),
+            # Define 3 segments: keep first as-is, speed up second by 2x, remove third
+            portion_method=[
+                (1, None),  # Keep segment 1 as is
+                (1, PARTIAL_TASKS.speedup(multiple=2)),  # Speed up segment 2
+                (1, "remove")  # Remove segment 3
+            ]
+        ).render()
+        ```
     """
 
     Custom = Custom
     Cut = Cut
     Speedup = Speedup
     Jumpcut = Jumpcut
-    CutSilence = CutSilence
     CutSilenceRerender = CutSilenceRerender
-    CutMotionless = CutMotionless
+    CutSilence = CutSilence
     CutMotionlessRerender = CutMotionlessRerender
+    CutMotionless = CutMotionless
     PartitionVideo = PartitionVideo
 
 
+type PARTIAL_TASK = Callable[..., Any]
+
+
 class PARTIAL_TASKS(FunctionEnum):
-    """Collection of factory functions for creating partially configured task functions.
+    """Collection of factory functions for creating partially configured FFmpeg task functions.
 
-    This class provides static methods that return functions pre-configured with
-    specific parameters, allowing for easier reuse of common configurations.
+    This class provides static methods that create and return partially configured functions
+    for common FFmpeg video processing tasks. Each method pre-configures task parameters,
+    creating a simpler function that only requires input and output file paths.
 
-    Each method returns a function that takes input_file and output_file parameters,
-    along with optional overrides.
+    The returned functions are suitable for:
+    - Direct execution with input/output files
+    - Being passed as callbacks to other operations
+    - Creating processing pipelines with consistent configurations
+
+    Each factory method returns a callable that accepts:
+    - input_file: Path to the source video file
+    - output_file: Path where the processed video will be saved
+    - options: Optional runtime configuration overrides
+
+    Examples:
+        # Create a function that will speed up videos by 4x
+        fast_forward = PARTIAL_TASKS.speedup(multiple=4)
+
+        # Apply it to a video file
+        fast_forward('input.mp4', 'output.mp4')
+
+        # Create a function that removes silent parts with specific threshold
+        remove_silence = PARTIAL_TASKS.cut_silence(dB=-30)
+
+        # Apply it to multiple files
+        for file in video_files:
+            remove_silence(file, f"processed_{file.name}")
     """
+
+    @staticmethod
+    def custom(
+        input_kwargs: FFKwargs | None = None,
+        output_kwargs: FFKwargs | None = None,
+    ) -> PARTIAL_TASK:
+        """Create a partially configured custom FFmpeg function.
+
+        Args:
+            input_kwargs: Input-related arguments
+            output_kwargs: Output-related arguments
+
+        Returns:
+            Function that applies custom FFmpeg processing when called with input and output files
+        """
+
+        def _partial(
+            input_file: str | Path,
+            output_file: str | Path,
+            options: OptionFFRender | None = None,
+        ):
+            kwargs = {
+                "input_file": input_file,
+                "output_file": output_file,
+                "input_kwargs": input_kwargs or {},
+                "output_kwargs": output_kwargs or {},
+            }
+            return Custom(**kwargs).override_option(options=options).render()
+
+        return _partial
+
+    @staticmethod
+    def cut(
+        ss: str = "00:00:00",
+        to: str = "00:00:01",
+        rerender: bool = False,
+        input_kwargs: FFKwargs | None = None,
+        output_kwargs: FFKwargs | None = None,
+    ) -> PARTIAL_TASK:
+        """Create a partially configured cut function.
+
+        Args:
+            ss: Start time in format 'HH:MM:SS'
+            to: End time in format 'HH:MM:SS'
+            rerender: Whether to re-encode the video (True) or stream copy (False)
+            input_kwargs: Additional input-related arguments
+            output_kwargs: Additional input-related arguments
+
+        Returns:
+            Function that cuts the video when called with input and output files
+        """
+
+        def _partial(
+            input_file: str | Path,
+            output_file: str | Path,
+            options: OptionFFRender | None = None,
+        ):
+            kwargs = {
+                "input_file": input_file,
+                "output_file": output_file,
+                "ss": ss,
+                "to": to,
+                "rerender": rerender,
+                "input_kwargs": input_kwargs or {},
+                "output_kwargs": output_kwargs or {},
+            }
+            return Cut(**kwargs).override_option(options=options).render()
+
+        return _partial
 
     @staticmethod
     def speedup(
         multiple: float | int = DEFAULTS.speedup_multiple.value,
         input_kwargs: FFKwargs | None = None,
         output_kwargs: FFKwargs | None = None,
-    ):
+    ) -> PARTIAL_TASK:
         """Create a partially configured speedup function.
 
         Args:
@@ -2342,12 +2494,22 @@ class PARTIAL_TASKS(FunctionEnum):
         Returns:
             Function that applies the speedup effect when called with input and output files
         """
-        return _partial_render_task(
-            task=FF_TASKS.Speedup,
-            multiple=multiple,
-            input_kwargs=input_kwargs or {},
-            output_kwargs=output_kwargs or {},
-        )
+
+        def _partial(
+            input_file: str | Path,
+            output_file: str | Path,
+            options: OptionFFRender | None = None,
+        ):
+            kwargs = {
+                "input_file": input_file,
+                "output_file": output_file,
+                "multiple": multiple,
+                "input_kwargs": input_kwargs or {},
+                "output_kwargs": output_kwargs or {},
+            }
+            return Speedup(**kwargs).override_option(options=options).render()
+
+        return _partial
 
     @staticmethod
     def jumpcut(
@@ -2357,7 +2519,7 @@ class PARTIAL_TASKS(FunctionEnum):
         b2_multiple: float = 0,  # 0 means remove this part
         input_kwargs: FFKwargs | None = None,
         output_kwargs: FFKwargs | None = None,
-    ):
+    ) -> PARTIAL_TASK:
         """Create a partially configured jumpcut function.
 
         Args:
@@ -2371,64 +2533,25 @@ class PARTIAL_TASKS(FunctionEnum):
         Returns:
             Function that applies the jumpcut effect when called with input and output files
         """
-        return _partial_render_task(
-            task=FF_TASKS.Jumpcut,
-            b1_duration=b1_duration,
-            b2_duration=b2_duration,
-            b1_multiple=b1_multiple,
-            b2_multiple=b2_multiple,
-            input_kwargs=input_kwargs or {},
-            output_kwargs=output_kwargs or {},
-        )
 
-    @staticmethod
-    def custom(
-        input_kwargs: FFKwargs | None = None,
-        output_kwargs: FFKwargs | None = None,
-    ):
-        """Create a partially configured custom FFmpeg function.
+        def _partial(
+            input_file: str | Path,
+            output_file: str | Path,
+            options: OptionFFRender | None = None,
+        ):
+            kwargs = {
+                "input_file": input_file,
+                "output_file": output_file,
+                "b1_duration": b1_duration,
+                "b2_duration": b2_duration,
+                "b1_multiple": b1_multiple,
+                "b2_multiple": b2_multiple,
+                "input_kwargs": input_kwargs or {},
+                "output_kwargs": output_kwargs or {},
+            }
+            return Jumpcut(**kwargs).override_option(options=options).render()
 
-        Args:
-            input_kwargs: Input-related arguments
-            output_kwargs: Output-related arguments
-
-        Returns:
-            Function that applies custom FFmpeg processing when called with input and output files
-        """
-        return _partial_render_task(
-            task=FF_TASKS.Custom,
-            input_kwargs=input_kwargs or {},
-            output_kwargs=output_kwargs or {},
-        )
-
-    @staticmethod
-    def cut(
-        ss: str = "00:00:00",
-        to: str = "00:00:01",
-        rerender: bool = False,
-        input_kwargs: FFKwargs | None = None,
-        output_kwargs: FFKwargs | None = None,
-    ):
-        """Create a partially configured cut function.
-
-        Args:
-            ss: Start time in format 'HH:MM:SS'
-            to: End time in format 'HH:MM:SS'
-            rerender: Whether to re-encode the video (True) or stream copy (False)
-            input_kwargs: Additional input-related arguments
-            output_kwargs: Additional output-related arguments
-
-        Returns:
-            Function that cuts the video when called with input and output files
-        """
-        return _partial_render_task(
-            task=FF_TASKS.Cut,
-            ss=ss,
-            to=to,
-            rerender=rerender,
-            input_kwargs=input_kwargs or {},
-            output_kwargs=output_kwargs or {},
-        )
+        return _partial
 
     @staticmethod
     def cut_silence_rerender(
@@ -2436,25 +2559,37 @@ class PARTIAL_TASKS(FunctionEnum):
         sampling_duration: float = DEFAULTS.sampling_duration.value,
         input_kwargs: FFKwargs | None = None,
         output_kwargs: FFKwargs | None = None,
-    ):
+    ) -> PARTIAL_TASK:
         """Create a partially configured silence cutting function with re-encoding.
 
         Args:
             dB: Audio threshold level in dB for identifying silence
             sampling_duration: Minimum duration of silence to detect
             input_kwargs: Additional input-related arguments
-            output_kwargs: Additional output-related arguments
+            output_kwargs: Additional input-related arguments
 
         Returns:
             Function that removes silent segments with re-encoding when called with input and output files
         """
-        return _partial_render_task(
-            task=FF_TASKS.CutSilenceRerender,
-            dB=dB,
-            sampling_duration=sampling_duration,
-            input_kwargs=input_kwargs or {},
-            output_kwargs=output_kwargs or {},
-        )
+
+        def _partial(
+            input_file: str | Path,
+            output_file: str | Path,
+            options: OptionFFRender | None = None,
+        ):
+            kwargs = {
+                "input_file": input_file,
+                "output_file": output_file,
+                "dB": dB,
+                "sampling_duration": sampling_duration,
+                "input_kwargs": input_kwargs or {},
+                "output_kwargs": output_kwargs or {},
+            }
+            return (
+                CutSilenceRerender(**kwargs).override_option(options=options).render()
+            )
+
+        return _partial
 
     @staticmethod
     def cut_silence(
@@ -2463,7 +2598,7 @@ class PARTIAL_TASKS(FunctionEnum):
         seg_min_duration: float = DEFAULTS.seg_min_duration.value,
         even_further: FurtherMethod = "remove",  # For other segments, remove means remove, None means copy
         odd_further: FurtherMethod = None,
-    ):
+    ) -> PARTIAL_TASK:
         """Create a partially configured silence cutting function.
 
         Args:
@@ -2476,14 +2611,58 @@ class PARTIAL_TASKS(FunctionEnum):
         Returns:
             Function that removes silent segments when called with input and output files
         """
-        return _partial_render_task(
-            task=FF_TASKS.CutSilence,
-            dB=dB,
-            sampling_duration=sampling_duration,
-            seg_min_duration=seg_min_duration,
-            even_further=even_further,
-            odd_further=odd_further,
-        )
+
+        def _partial(
+            input_file: str | Path,
+            output_file: str | Path,
+            options: OptionFFRender | None = None,
+        ):
+            kwargs = {
+                "input_file": input_file,
+                "output_file": output_file,
+                "dB": dB,
+                "sampling_duration": sampling_duration,
+                "seg_min_duration": seg_min_duration,
+                "even_further": even_further,
+                "odd_further": odd_further,
+            }
+            return CutSilence(**kwargs).override_option(options=options).render()
+
+        return _partial
+
+    @staticmethod
+    def cut_motionless_rerender(
+        threshold: float = DEFAULTS.motionless_threshold.value,
+        sampling_duration: float = DEFAULTS.sampling_duration.value,
+    ) -> PARTIAL_TASK:
+        """Create a partially configured motionless cutting function with re-encoding.
+
+        Args:
+            threshold: Scene change threshold for identifying motion
+            sampling_duration: Duration between motion samples
+
+        Returns:
+            Function that removes motionless segments with re-encoding when called with input and output files
+        """
+
+        def _partial(
+            input_file: str | Path,
+            output_file: str | Path,
+            options: OptionFFRender | None = None,
+        ):
+            kwargs = {
+                "input_file": input_file,
+                "output_file": output_file,
+                "threshold": threshold,
+                "sampling_duration": sampling_duration,
+            }
+            return (
+                CutMotionlessRerender(**kwargs)
+                .override_option(options=options)
+                .render()
+            )
+
+        return _partial
 
     @staticmethod
     def cut_motionless(
@@ -2492,7 +2671,7 @@ class PARTIAL_TASKS(FunctionEnum):
         seg_min_duration: float = DEFAULTS.seg_min_duration.value,
         even_further: FurtherMethod = "remove",  # For other segments, remove means remove, None means copy
         odd_further: FurtherMethod = None,  # For segments, remove means remove, None means copy
-    ):
+    ) -> PARTIAL_TASK:
         """Create a partially configured motionless cutting function.
 
         Args:
@@ -2505,41 +2684,31 @@ class PARTIAL_TASKS(FunctionEnum):
         Returns:
             Function that removes motionless segments when called with input and output files
         """
-        return _partial_render_task(
-            task=FF_TASKS.CutMotionless,
-            threshold=threshold,
-            sampling_duration=sampling_duration,
-            seg_min_duration=seg_min_duration,
-            even_further=even_further,
-            odd_further=odd_further,
-        )
 
-    @staticmethod
-    def cut_motionless_rerender(
-        threshold: float = DEFAULTS.motionless_threshold.value,
-        sampling_duration: float = DEFAULTS.sampling_duration.value,
-    ):
-        """Create a partially configured motionless cutting function with re-encoding.
+        def _partial(
+            input_file: str | Path,
+            output_file: str | Path,
+            options: OptionFFRender | None = None,
+        ):
+            kwargs = {
+                "input_file": input_file,
+                "output_file": output_file,
+                "threshold": threshold,
+                "sampling_duration": sampling_duration,
+                "seg_min_duration": seg_min_duration,
+                "even_further": even_further,
+                "odd_further": odd_further,
+            }
+            return CutMotionless(**kwargs).override_option(options=options).render()
 
-        Args:
-            threshold: Scene change threshold for identifying motion
-            sampling_duration: Duration between motion samples
-
-        Returns:
-            Function that removes motionless segments with re-encoding when called with input and output files
-        """
-        return _partial_render_task(
-            task=FF_TASKS.CutMotionlessRerender,
-            threshold=threshold,
-            sampling_duration=sampling_duration,
-        )
+        return _partial
 
     @staticmethod
     def partion_video(
         count: int = 0,  # Easy way to create portion_method
         portion_method: PortionMethod | None = None,  # Main logic for partitioning
         output_dir: Path | str | None = None,
-    ):
+    ) -> PARTIAL_TASK:
         """Create a partially configured video partitioning function.
 
         Args:
@@ -2550,41 +2719,19 @@ class PARTIAL_TASKS(FunctionEnum):
         Returns:
             Function that partitions the video when called with input and output files
         """
-        return _partial_render_task(
-            task=FF_TASKS.PartitionVideo,
-            count=count,
-            portion_method=portion_method,
-            output_dir=output_dir,
-        )
 
+        def _partial(
+            input_file: str | Path,
+            output_file: str | Path,
+            options: OptionFFRender | None = None,
+        ):
+            kwargs = {
+                "input_file": input_file,
+                "output_file": output_file,
+                "count": count,
+                "portion_method": portion_method,
+                "output_dir": output_dir,
+            }
+            return PartitionVideo(**kwargs).override_option(options=options).render()
 
-# Partial tasks
-def _partial_render_task(
-    task: FF_TASKS,
-    **config,
-) -> Callable[[str | Path, str | Path, OptionFFRender | None], Any]:
-    """Create a partially configured task function with the given configuration.
-
-    This is a factory function that creates partially applied functions for
-    specific FFmpeg tasks, allowing reuse of common configurations.
-
-    Args:
-        task: The task class to instantiate
-        **config: Configuration parameters for the task
-
-    Returns:
-        A function that takes input_file, output_file, and optional overrides
-    """
-
-    def _partial(
-        input_file: str | Path,
-        output_file: str | Path,
-        options: OptionFFRender | None = None,
-    ) -> Any:
-        return (
-            task.value(input_file=input_file, output_file=output_file, **config)
-            .override_option(options=options)
-            .render()
-        )
-
-    return _partial
+        return _partial

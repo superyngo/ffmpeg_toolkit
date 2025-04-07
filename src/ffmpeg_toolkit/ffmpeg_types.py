@@ -1,4 +1,4 @@
-from typing import TypedDict, NotRequired
+from typing import TypedDict, NotRequired, Callable, Any
 from types import FunctionType
 from functools import partial
 from enum import StrEnum, auto, Enum
@@ -115,6 +115,32 @@ class VideoSuffix(StrEnum):
     MP4 = auto()
     MKV = auto()
     AVI = auto()
+
+
+class FFRenderException(TypedDict):
+    """Type definition for render exceptions, providing code, message, and optional hook."""
+
+    code: int
+    message: str
+    hook: NotRequired[Callable[[], Any]]
+
+
+class OptionFFRender(TypedDict):
+    """Type definition for optional render parameters.
+
+    Attributes:
+        task_descripton: Description of the task
+        delete_after: Whether to delete the input file after processing
+        exception: Exception information, if any
+        post_task: Function to process results after command execution
+        return_result: Whether to return the command result rather than output file path
+    """
+
+    task_descripton: NotRequired[str]
+    delete_after: NotRequired[bool]
+    exception: NotRequired[FFRenderException]
+    post_task: NotRequired[Callable[..., Any]]
+    return_result: NotRequired[bool]
 
 
 # Type aliases

@@ -14,7 +14,7 @@ from .ffmpeg_toolkit import (
     CutSilenceRerender,
     CutMotionlessRerender,
     SplitSegments,
-    FPRenderTasks,
+    FF_TASKS,
 )
 from . import ffmpeg_types as types
 
@@ -44,5 +44,5 @@ __all__: list[str] = [
     "CutSilenceRerender",
     "CutMotionlessRerender",
     "SplitSegments",
-    "FPRenderTasks",
+    "FF_TASKS",
 ]
