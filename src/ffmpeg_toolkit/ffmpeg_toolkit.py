@@ -1474,7 +1474,7 @@ class CutSilence(FFCreateTask):
 
         try:
             # Perform advanced keep or remove by split segments
-            KeepOrRemove(
+            output_file = KeepOrRemove(
                 input_file=self.input_file,
                 output_file=self.output_file,
                 video_segments=adjusted_segments,
@@ -1482,7 +1482,7 @@ class CutSilence(FFCreateTask):
                 odd_further=self.odd_further,
                 delete_after=self.delete_after,
             ).render()
-            return self.output_file  # type: ignore
+            return output_file  # type: ignore
 
         except Exception as e:
             logger.error(
@@ -1569,7 +1569,7 @@ class CutMotionless(FFCreateTask):
             return ERROR_CODE.NO_VALID_SEGMENTS
         try:
             # Perform advanced keep or remove by split segments
-            KeepOrRemove(
+            output_file = KeepOrRemove(
                 input_file=self.input_file,
                 output_file=self.output_file,
                 video_segments=adjusted_segments,
@@ -1577,7 +1577,7 @@ class CutMotionless(FFCreateTask):
                 odd_further=self.odd_further,
                 delete_after=self.delete_after,
             ).render()
-            return self.output_file  # type: ignore
+            return output_file  # type: ignore
 
         except Exception as e:
             logger.error(
