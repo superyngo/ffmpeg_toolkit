@@ -32,7 +32,11 @@ portion_method3 = [
     (
         2,
         PARTIAL_TASKS.cut_silence(
-            even_further=PARTIAL_TASKS.cut_motionless(),
+            even_further=PARTIAL_TASKS.cut_motionless(
+                even_further=PARTIAL_TASKS.cut_motionless(
+                    even_further=PARTIAL_TASKS.cut_silence()
+                )
+            ),
             odd_further=PARTIAL_TASKS.jumpcut(),
         ),
     ),
@@ -50,7 +54,7 @@ portion_method2 = [
     (
         4,
         PARTIAL_TASKS.partion_video(
-            # portion_method=portion_method3,
+            portion_method=portion_method3,
             output_dir=input_file.parent / "can",
         ),
     ),
@@ -59,31 +63,31 @@ portion_method2 = [
 portion_method1 = [
     (1, PARTIAL_TASKS.cut_silence_rerender()),
     (4, PARTIAL_TASKS.speedup(multiple=5)),
-    # (
-    #     4,
-    #     PARTIAL_TASKS.partion_video(
-    #         portion_method=portion_method2,
-    #         output_dir=input_file.parent / "can",
-    #     ),
-    # ),
+    (
+        4,
+        PARTIAL_TASKS.partion_video(
+            portion_method=portion_method2,
+            output_dir=input_file.parent / "can",
+        ),
+    ),
 ]
 
 # ffmpeg_toolkit.FF_TASKS.Merge(
 #     input_dir_or_files=dir, output_file=dir / "o.mkv"
 # ).render()
 
-# ffmpeg_toolkit.PartitionVideo(
-#     input_file=input_file,
-#     output_file=input_file.parent,
-#     portion_method=portion_method1,
-#     output_dir=input_file.parent / "can",
-# ).render()
-
-ffmpeg_toolkit.FF_TASKS.CutMotionless(
+FF_TASKS.PartitionVideo(
     input_file=input_file,
-    dB=-35,
-    # output_file=input_file,
-    even_further=PARTIAL_TASKS.cut_motionless(),
-    odd_further=PARTIAL_TASKS.cut_silence(dB=-30),
+    output_file=input_file.parent,
+    portion_method=portion_method1,
+    output_dir=input_file.parent / "can",
 ).render()
+
+# ffmpeg_toolkit.FF_TASKS.CutMotionless(
+#     input_file=input_file,
+#     # threshold=0.0025,
+#     # output_file=input_file,
+#     even_further=PARTIAL_TASKS.cut_motionless(),
+#     # odd_further=PARTIAL_TASKS.cut_silence(dB=-30),
+# ).render()
 # code.interact(local=globals())
