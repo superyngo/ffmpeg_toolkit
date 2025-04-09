@@ -1,21 +1,6 @@
 import os
 from pathlib import Path
-from .ffmpeg_toolkit import (
-    DEFAULTS,
-    PARTIAL_TASKS,
-    PartitionVideo,
-    Custom,
-    CutSilence,
-    CutMotionless,
-    Cut,
-    Speedup,
-    Jumpcut,
-    Merge,
-    CutSilenceRerender,
-    CutMotionlessRerender,
-    SplitSegments,
-    FPRenderTasks,
-)
+from .ffmpeg_toolkit import FF_TASKS, PARTIAL_TASKS, BatchTask
 from . import ffmpeg_types as types
 
 PACKAGE_NAME = "ffmpeg_converter"
@@ -29,20 +14,4 @@ bin_path = current_file_path.parent / "bin"
 os.environ["PATH"] = str(bin_path) + os.pathsep + os.environ["PATH"]
 
 
-__all__: list[str] = [
-    "types",
-    "DEFAULTS",
-    "PARTIAL_TASKS",
-    "PartitionVideo",
-    "CutSilence",
-    "CutMotionless",
-    "Custom",
-    "Cut",
-    "Speedup",
-    "Jumpcut",
-    "Merge",
-    "CutSilenceRerender",
-    "CutMotionlessRerender",
-    "SplitSegments",
-    "FPRenderTasks",
-]
+__all__: list[str] = ["types", "PARTIAL_TASKS", "FF_TASKS", "BatchTask"]
