@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from .ffmpeg_toolkit_core import FPRenderTasks
 from .ffmpeg_toolkit import FF_TASKS, PARTIAL_TASKS, BatchTask
 from . import ffmpeg_types as types
 
@@ -14,4 +15,10 @@ bin_path = current_file_path.parent / "bin"
 os.environ["PATH"] = str(bin_path) + os.pathsep + os.environ["PATH"]
 
 
-__all__: list[str] = ["types", "PARTIAL_TASKS", "FF_TASKS", "BatchTask"]
+__all__: list[str] = [
+    "types",
+    "PARTIAL_TASKS",
+    "FF_TASKS",
+    "BatchTask",
+    "FPRenderTasks",
+]
