@@ -37,6 +37,7 @@ from .ffmpeg_types import (
     OptionFFRender,
     PortionMethod,
     VideoSuffix,
+    ValidExtensions,
 )
 
 try:
@@ -340,7 +341,10 @@ def _ffprobe(**ffkwargs):
 
 
 def _handle_output_file_path(
-    input_file: Path, output_file: Path | str | None, task_description: str
+    input_file: Path,
+    output_file: Path | str | None,
+    task_description: str,
+    valid_extensions: ValidExtensions | None = None,
 ) -> Path:
     """Handle various output file path scenarios and return a valid output path.
 
@@ -359,12 +363,14 @@ def _handle_output_file_path(
         ValueError: If output_file exists and is not a directory
     """
     # Handle None
+    if valid_extensions is None:
+        valid_extensions = set(VideoSuffix)
+
     if output_file is None:
         return (
             input_file.parent
-            / f"{input_file.stem}_{task_description}{input_file.suffix if input_file.suffix in VideoSuffix else '.' + VideoSuffix.MKV}"
+            / f"{input_file.stem}_{task_description}{input_file.suffix if input_file.suffix in valid_extensions else '.' + VideoSuffix.MKV}"
         )
-
     output_file = Path(output_file)
 
     # Handle "-"
@@ -380,7 +386,7 @@ def _handle_output_file_path(
         output_file.mkdir(exist_ok=True)
         output_file = (
             output_file
-            / f"{input_file.stem}_{task_description}{input_file.suffix if input_file.suffix in VideoSuffix else '.' + VideoSuffix.MKV}"
+            / f"{input_file.stem}_{task_description}{input_file.suffix if input_file.suffix in valid_extensions else '.' + VideoSuffix.MKV}"
         )
     return output_file
 
@@ -736,6 +742,9 @@ class FFCreateTask(FFCreateCommand):
     delete_after: bool = False
     exception: FFRenderException | None = None
     post_hook: Callable[..., Any] | None = None
+    valid_extensions: set[VideoSuffix] | set[str] = Field(
+        default_factory=lambda: set(VideoSuffix)
+    )
 
     def override_option(self, options: OptionFFRender | None = None) -> Self:
         """Override default options with provided values.
@@ -764,7 +773,10 @@ class FFCreateTask(FFCreateCommand):
         # Handle inout and output file path
         self.input_file = Path(self.input_file)
         self.output_file = _handle_output_file_path(
-            self.input_file, self.output_file, self.task_descripton
+            self.input_file,
+            self.output_file,
+            self.task_descripton,
+            self.valid_extensions,
         )
         # Handle temp output file path
         if self.output_file == Path("-") or r"%d" in str(self.output_file):
@@ -923,7 +935,9 @@ class Merge(FFCreateTask):
             if isinstance(self.input_dir_or_files, list)
             else Path(self.input_dir_or_files)
         )
-        input_txt: Path = create_merge_txt(self.input_dir_or_files)
+        input_txt: Path = create_merge_txt(
+            self.input_dir_or_files, None, self.valid_extensions
+        )
         self.input_file = input_txt
         self.input_kwargs = _defalut_input_kwargs | self.input_kwargs
         self.output_kwargs = _defalut_output_kwargs | self.output_kwargs
@@ -1126,7 +1140,10 @@ class KeepOrRemove(FFCreateTask):
         # Handle input and output file path
         self.input_file = Path(self.input_file)
         self.output_file = _handle_output_file_path(
-            self.input_file, self.output_file, self.task_descripton
+            self.input_file,
+            self.output_file,
+            self.task_descripton,
+            self.valid_extensions,
         )
 
     @timing
@@ -1386,6 +1403,7 @@ class PartitionVideo(FFCreateTask):
                     self.input_file,  # type: ignore
                     self.output_file,
                     self.task_descripton,
+                    self.valid_extensions,
                 )
                 Merge(
                     input_dir_or_files=new_video_files,
@@ -1434,7 +1452,10 @@ class CutSilence(FFCreateTask):
         # Handle input and output file path
         self.input_file = Path(self.input_file)
         self.output_file = _handle_output_file_path(
-            self.input_file, self.output_file, self.task_descripton
+            self.input_file,
+            self.output_file,
+            self.task_descripton,
+            self.valid_extensions,
         )
 
     @timing
@@ -1529,7 +1550,10 @@ class CutMotionless(FFCreateTask):
         # Handle input and output file path
         self.input_file = Path(self.input_file)
         self.output_file = _handle_output_file_path(
-            self.input_file, self.output_file, self.task_descripton
+            self.input_file,
+            self.output_file,
+            self.task_descripton,
+            self.valid_extensions,
         )
 
     @timing
@@ -1736,7 +1760,9 @@ def _create_jumpcut_kwargs(
 
 # For Merge
 def create_merge_txt(
-    video_files_source: Path | list[Path], output_txt: Path | None = None
+    video_files_source: Path | list[Path],
+    output_txt: Path | None = None,
+    valid_extensions: ValidExtensions | None = None,
 ) -> Path:
     """Create a text file listing video files for FFmpeg concatenation.
 
@@ -1758,6 +1784,9 @@ def create_merge_txt(
         temp_output_dir = Path(tempfile.mkdtemp(prefix=DEFAULTS.temp_prefix.value))
         output_txt = temp_output_dir / "input.txt"
 
+    if valid_extensions is None:
+        valid_extensions = set(VideoSuffix)
+
     if isinstance(video_files_source, Path):
         if not video_files_source.is_dir():
             raise ValueError(f"{video_files_source} is not a directory")
@@ -1765,13 +1794,13 @@ def create_merge_txt(
             list(
                 video
                 for video in video_files_source.glob("*")
-                if video.suffix.lstrip(".") in VideoSuffix
+                if video.suffix.lstrip(".") in valid_extensions
             ),
             key=lambda video: video.stem,
         )
     else:
         for video in video_files_source:
-            if video.suffix.lstrip(".") not in VideoSuffix:
+            if video.suffix.lstrip(".") not in valid_extensions:
                 raise ValueError(f"{video} is not a video file")
         video_files = video_files_source
 

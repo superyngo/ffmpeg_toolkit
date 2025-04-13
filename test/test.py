@@ -15,7 +15,7 @@ bin_path = current_file_path.parent / "bin"
 os.environ["PATH"] = a = str(bin_path) + os.pathsep + os.environ["PATH"]
 
 
-input_file = Path(r"C:\Users\user\Downloads\input_merge.mkv")
+input_file = Path(r"F:\打開傘\打開傘.mkv")
 # input_file = Path(r"C:\Users\user\Downloads\IMG_2078.mp4")
 dir = Path(r"C:\Users\user\Downloads")
 
@@ -81,6 +81,7 @@ FF_TASKS.PartitionVideo(
     output_file=input_file.parent,
     portion_method=portion_method1,
     output_dir=input_file.parent / "can",
+    valid_extensions={"mkv"},
 ).render()
 
 # ffmpeg_toolkit.FF_TASKS.CutMotionless(

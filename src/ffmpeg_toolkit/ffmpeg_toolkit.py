@@ -24,7 +24,6 @@ from .ffmpeg_types import (
     FurtherMethod,
     OptionFFRender,
     PARTIAL_TASK,
-    ValidExtensions,
     VideoSuffix,
 )
 
@@ -561,45 +560,6 @@ class PARTIAL_TASKS(FunctionEnum):
         return _partial
 
 
-def _list_video_files(
-    root_path: str | Path,
-    valid_extensions: ValidExtensions,
-    walkthrough: bool = True,
-) -> list[Path]:
-    """Find all video files in a directory with the specified extensions.
-
-    Args:
-        root_path: Directory to search for video files
-        valid_extensions: Set of file extensions to include (without the dot)
-        walkthrough: Whether to search recursively through subdirectories
-
-    Returns:
-        List of Path objects for all matching video files
-    """
-    if not valid_extensions:
-        valid_extensions = set(VideoSuffix)
-
-    root_path = Path(root_path)
-    video_files: list[Path] = []
-
-    # Use rglob to recursively find files with the specified extensions
-    video_files = (
-        [
-            file
-            for file in root_path.rglob("*")
-            if file.is_file() and file.suffix.lstrip(".").lower() in valid_extensions
-        ]
-        if walkthrough
-        else [
-            file
-            for file in root_path.iterdir()
-            if file.is_file() and file.suffix.lstrip(".").lower() in valid_extensions
-        ]
-    )
-
-    return video_files
-
-
 class BatchTask(BaseModel):
     """Batch processing configuration for FFmpeg video tasks.
 
@@ -620,9 +580,9 @@ class BatchTask(BaseModel):
     input_folder_path: Path
     output_folder_path: Path | None = None
     walkthrough: bool = False
-    valid_extensions: ValidExtensions = Field(default_factory=set)
-    input_kwargs: FFKwargs = Field(default_factory=dict)
-    output_kwargs: FFKwargs = Field(default_factory=dict)
+    valid_extensions: set[VideoSuffix] | set[str] = Field(
+        default_factory=lambda: set(VideoSuffix)
+    )
     delete_after: bool = False
     post_hook: Callable | None = None
 
@@ -635,24 +595,39 @@ class BatchTask(BaseModel):
 
         self.output_folder_path.mkdir(parents=True, exist_ok=True)
 
-        if not self.valid_extensions:
-            self.valid_extensions = set(VideoSuffix)
-
     @computed_field
     @property
     def video_files(self) -> list[Path]:
-        """List all video files in the specified folder with valid extensions.
+        """Find all video files in a directory with the specified extensions.
+
+        Args:
+            root_path: Directory to search for video files
+            valid_extensions: Set of file extensions to include (without the dot)
+            walkthrough: Whether to search recursively through subdirectories
 
         Returns:
-            List of Path objects pointing to valid video files
+            List of Path objects for all matching video files
         """
-        files = _list_video_files(
-            self.input_folder_path,
-            valid_extensions=self.valid_extensions,
-            walkthrough=self.walkthrough,
+
+        # Use rglob to recursively find files with the specified extensions
+        video_files: list[Path] = (
+            [
+                file
+                for file in self.input_folder_path.rglob("*")
+                if file.is_file()
+                and file.suffix.lstrip(".").lower() in self.valid_extensions
+            ]
+            if self.walkthrough
+            else [
+                file
+                for file in self.input_folder_path.iterdir()
+                if file.is_file()
+                and file.suffix.lstrip(".").lower() in self.valid_extensions
+            ]
         )
-        logger.info(f"Found {len(files)} video files in {self.input_folder_path}")
-        return files
+        logger.info(f"Found {len(video_files)} video files in {self.input_folder_path}")
+
+        return video_files
 
     def render(self, task: PARTIAL_TASKS) -> None:
         """Apply the specified task to all video files in the batch.
@@ -664,11 +639,11 @@ class BatchTask(BaseModel):
             task: A partially configured task function from PARTIAL_TASKS
         """
         for video in self.video_files:
-            output_gile = task(
+            output_file = task(
                 input_file=video,
                 output_file=self.output_folder_path,
                 options={"delete_after": self.delete_after},
             )
             if self.post_hook:
                 logger.info("Post hooking...")
-                self.post_hook(video, output_gile)
+                self.post_hook(video, output_file)

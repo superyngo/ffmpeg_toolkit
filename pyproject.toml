@@ -1,3 +1,13 @@
+[project]
+name = "ffmpeg-toolkit"
+version = "0.1.9"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "pydantic>=2.11.3",
+]
+
 [build-system]
 requires = ["setuptools>=42", "wheel", "pydantic"]
 build-backend = "setuptools.build_meta"
