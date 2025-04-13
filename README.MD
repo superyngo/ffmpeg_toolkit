@@ -2,6 +2,24 @@
 
 A comprehensive Python toolkit for video processing using FFmpeg. This project offers tools to enhance your experience with FFmpeg through a clean, object-oriented interface. It includes functionality for tasks such as speeding up videos, removing silence/motionless sections, performing jump cuts, batch processing, and probing encoding information.
 
+**Prerequisites:** Ensure FFmpeg is installed and available in your system PATH.
+
+## Quick Start
+
+```python
+from ffmpeg_toolkit import FF_TASKS
+
+# Speed up a video by 2x
+FF_TASKS.Speedup("input.mp4", "output.mp4", multiple=2).render()
+
+# Remove silent parts
+FF_TASKS.CutSilence("input.mp4", "output.mp4").render()
+
+# Create a jump cut effect
+FF_TASKS.Jumpcut("input.mp4", "output.mp4", b1_duration=5, b2_duration=3).render()
+```
+
+
 ## Features
 
 - **Video Speed Manipulation**: Speed up or slow down videos with customizable factors
@@ -86,7 +104,7 @@ FF_TASKS.Jumpcut(
     b1_duration=5,      # Keep 5 seconds
     b2_duration=5,      # Then skip 5 seconds
     b1_multiple=1,      # Play first segment at normal speed
-    b2_multiple=0       # Remove second segment
+    b2_multiple=0       # Remove second segment (setting multiple to 0 effectively removes the segment)
 ).render()
 
 # Create a creative effect with varying speeds
@@ -96,7 +114,7 @@ FF_TASKS.Jumpcut(
     b1_duration=3,      # First 3 seconds
     b2_duration=2,      # Next 2 seconds
     b1_multiple=1,      # Normal speed
-    b2_multiple=2       # Double speed
+    b2_multiple=2       # Double speed for the second segment
 ).render()
 ```
 
@@ -191,8 +209,34 @@ FF_TASKS.PartitionVideo(
         (1, None),                               # Keep segment 1 as is
         (1, PARTIAL_TASKS.speedup(multiple=2)),  # Speed up segment 2
         (1, "remove")                            # Remove segment 3
-    ]
+    ],
+    # Optional: Specify output file pattern if needed, e.g., "segment_{index}.mp4"
+    # output_pattern="segment_{index}.mp4"
 ).render()
+
+# Example: Split a tutorial video into intro, main content, and outro
+# Keep intro/outro at normal speed, speed up main content by 1.5x
+from ffmpeg_toolkit import PARTIAL_TASKS
+
+total_duration = FPRenderTasks().duration("tutorial.mp4").render() # Assume total duration is 600 seconds
+intro_duration = 30
+outro_duration = 60
+main_content_duration = total_duration - intro_duration - outro_duration
+
+if main_content_duration > 0:
+    FF_TASKS.PartitionVideo(
+        input_file="tutorial.mp4",
+        output_dir="processed_tutorial",
+        # Define segments by duration and processing method
+        portion_method=[
+            (intro_duration, None),                             # Keep intro as is
+            (main_content_duration, PARTIAL_TASKS.speedup(multiple=1.5)), # Speed up main content
+            (outro_duration, None)                              # Keep outro as is
+        ]
+    ).render()
+else:
+    print("Video is too short for the specified partitioning.")
+
 ```
 
 ## Simplified Workflow with PARTIAL_TASKS
@@ -318,6 +362,26 @@ batch = BatchTask(
     valid_extensions={"mp4", "mkv", "avi", "mov", "webm"}
 )
 batch.render(PARTIAL_TASKS.speedup(multiple=2))
+
+# Example 6: Batch processing with a post-hook to log results
+import os
+
+processed_log = "processed_files.log"
+if os.path.exists(processed_log):
+    os.remove(processed_log) # Clear log file before starting
+
+def log_completion(output_file):
+    with open(processed_log, "a") as f:
+        f.write(f"Successfully processed: {output_file}\n")
+    print(f"Logged completion for {output_file}")
+
+batch_with_hook = BatchTask(
+    input_folder_path="source_videos/",
+    output_folder_path="hooked_output/",
+    post_hook=log_completion
+)
+# Apply silence removal and log each completed file
+batch_with_hook.render(PARTIAL_TASKS.cut_silence(dB=-28))
 ```
 
 ### Combining Batch Processing with Other Features
@@ -408,6 +472,30 @@ final_output = FF_TASKS.Speedup(
     output_file="final.mp4",
     multiple=2
 ).render()
+
+# Example: Use probing to decide processing
+from ffmpeg_toolkit.ffmpeg_toolkit_core import FPRenderTasks
+
+input_video = "long_presentation.mp4"
+output_video = "processed_presentation.mp4"
+duration_threshold = 3600 # 1 hour in seconds
+
+# Get video duration first
+duration = FPRenderTasks().duration(input_video).render()
+
+# Only speed up if the video is longer than the threshold
+if duration > duration_threshold:
+    print(f"Video duration ({duration}s) exceeds threshold ({duration_threshold}s). Speeding up.")
+    FF_TASKS.Speedup(
+        input_file=input_video,
+        output_file=output_video,
+        multiple=1.5
+    ).render()
+else:
+    print(f"Video duration ({duration}s) is within threshold. No speedup applied.")
+    # Optionally, just copy the file or perform another action
+    # shutil.copy(input_video, output_video)
+
 ```
 
 ### Parallel Processing
@@ -415,17 +503,26 @@ final_output = FF_TASKS.Speedup(
 ```python
 import glob
 from concurrent.futures import ThreadPoolExecutor
+from ffmpeg_toolkit import PARTIAL_TASKS # Ensure PARTIAL_TASKS is imported
 
 speedup_task = PARTIAL_TASKS.speedup(multiple=2)
 
 input_files = glob.glob("input/*.mp4")
+output_dir = "output_parallel"
+Path(output_dir).mkdir(exist_ok=True) # Create output directory if it doesn't exist
+
 with ThreadPoolExecutor() as executor:
     futures = [
-        executor.submit(speedup_task, input_file, f"output/{i}_output.mp4")
-        for i, input_file in enumerate(input_files)
+        executor.submit(speedup_task, input_file, Path(output_dir) / f"{Path(input_file).stem}_output.mp4")
+        for input_file in input_files
     ]
-    for future in futures:
-        future.result()
+    # Wait for all tasks to complete and handle potential exceptions
+    for future in concurrent.futures.as_completed(futures):
+        try:
+            future.result() # Get result (or raise exception if task failed)
+        except Exception as e:
+            print(f"An error occurred during parallel processing: {e}")
+
 ```
 
 ## Links
