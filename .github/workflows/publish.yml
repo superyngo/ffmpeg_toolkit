@@ -5,7 +5,11 @@ on:
     branches:
       - main
     paths:
-      - setup.py # 只有 setup.py 檔案變動時才觸發
+      - setup.py
+      - pyproject.toml
+    if: >
+      contains(github.event.commits.*.modified, 'setup.py') &&
+      contains(github.event.commits.*.modified, 'pyproject.toml')
 
 permissions:
   contents: read
