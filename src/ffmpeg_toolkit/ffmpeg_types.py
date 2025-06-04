@@ -3,7 +3,10 @@ from enum import Enum, StrEnum, auto
 from functools import partial
 from pathlib import Path
 from types import FunctionType
-from typing import Any, Callable, Literal, NotRequired, TypedDict
+from typing import Any, Callable, Literal, NotRequired, TypedDict, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .ffmpeg_toolkit_core import ERROR_CODE
 
 
 class FunctionEnum(Enum):
@@ -211,12 +214,14 @@ Represents a dictionary of parameter names to their values, which can be
 either a general FFKwargsValue type or specifically a string value.
 """
 
-type PARTIAL_TASK = Callable[..., Any]
+type PARTIAL_TASK = Callable[..., "Path | ERROR_CODE | int | Any"]
 """
 Type alias for a callable that can be partially applied.
 
 Represents a function or callable object that can be invoked with
-arbitrary arguments and returns any type of value.
+arbitrary arguments and returns a Path, ERROR_CODE, integer, or any other type.
+Common return types include file paths for successful operations,
+ERROR_CODE enum values for failures, or other processing results.
 """
 
 type FurtherMethod = PARTIAL_TASK | Literal["remove"] | None

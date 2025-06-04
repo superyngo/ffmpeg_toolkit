@@ -2308,3 +2308,10 @@ def _create_cut_sl_kwargs(
         "filter_script:v": video_filter_script,
         "filter_script:a": audio_filter_script,
     }
+
+
+# Rebuild Pydantic models to resolve forward references
+CutSilence.model_rebuild()
+CutMotionless.model_rebuild()
+KeepOrRemove.model_rebuild()
+PartitionVideo.model_rebuild()
