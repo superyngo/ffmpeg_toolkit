@@ -7,9 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-01-17
+
 ### Added
 
-- **2026-01-17**: Added segment set operations feature for combining silence and motion detection
+- Added segment set operations feature for combining silence and motion detection
   - New utility functions for segment set operations:
     - `_union_segments()` - Union of two segment sets (A OR B)
     - `_intersect_segments()` - Intersection of two segment sets (A AND B)
@@ -20,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - New `CutByDetection` task class for combined silence and motion detection with set operations
   - New `PARTIAL_TASKS.cut_by_detection()` factory method
   - Export `SegmentOperation` from package `__init__.py`
+- Updated documentation:
+  - `ARCHITECTURE.md` - Added CutByDetection section and segment set operations algorithms
+  - `PORTING_GUIDE.md` - Added segment set operations implementation guide
 
 ## [0.2.2] - 2026-01-17
 
