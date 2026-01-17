@@ -71,6 +71,7 @@ BaseModel (Pydantic)
                     +-- PartitionVideo (split with per-segment processing)
                     +-- CutSilence (remove silence with stream copy)
                     +-- CutMotionless (remove motionless with stream copy)
+                    +-- CutByDetection (combined detection with set operations)
 ```
 
 ### Enums and Type Classes
@@ -91,6 +92,7 @@ Enum (Python)
 
 StrEnum
     +-- VideoSuffix (supported video extensions)
+    +-- SegmentOperation (set operations for detection combining)
 ```
 
 ---
@@ -325,6 +327,60 @@ Removes motionless segments from video.
 - `sampling_duration`: Sample interval (default: 0.2s)
 - Other parameters same as CutSilence
 
+### CutByDetection
+
+Combines silence and motion detection using set operations for flexible content selection.
+
+**Parameters:**
+- `dB`: Audio threshold in dB (default: -21)
+- `silence_sampling`: Silence sample interval (default: 0.2s)
+- `motion_threshold`: Motion detection threshold (default: 0.0095)
+- `motion_sampling`: Motion sample interval (default: 0.2s)
+- `operation`: Set operation type (SegmentOperation enum)
+- `seg_min_duration`: Minimum segment duration to keep
+- `even_further`: Processing for computed segments
+- `odd_further`: Processing for gap segments
+
+**SegmentOperation Options:**
+
+| Operation | Description | Use Case |
+|-----------|-------------|----------|
+| `UNION` | A OR B (sound or motion) | Keep most content |
+| `INTERSECTION` | A AND B (sound and motion) | Keep only highlights |
+| `SOUND_ONLY` | A - B (sound but not motion) | Extract audio-only content |
+| `MOTION_ONLY` | B - A (motion but not sound) | Extract silent action scenes |
+| `XOR` | (A OR B) - (A AND B) | Exclude overlapping segments |
+| `COMPLEMENT` | NOT (A OR B) | Extract completely static/silent segments |
+
+**Process:**
+```
+1. Detect non-silence segments using silencedetect filter
+2. Detect motion segments using scene detection
+3. Apply set operation (union, intersection, difference, etc.)
+4. Extract keyframes
+5. Adjust segments (minimum length, keyframe alignment, merge overlaps)
+6. Split video at segment boundaries
+7. Process each segment according to even_further/odd_further
+8. Merge remaining segments
+```
+
+**Example:**
+```python
+from ffmpeg_toolkit import FF_TASKS, SegmentOperation
+
+# Keep segments with sound OR motion (most content)
+FF_TASKS.CutByDetection(
+    input_file="input.mp4",
+    operation=SegmentOperation.UNION
+).render()
+
+# Keep only segments with sound AND motion (highlights)
+FF_TASKS.CutByDetection(
+    input_file="input.mp4",
+    operation=SegmentOperation.INTERSECTION
+).render()
+```
+
 ### KeepOrRemove
 
 Selectively processes video segments.
@@ -497,6 +553,72 @@ Input Segments
       |
       v
 Adjusted Segments
+```
+
+### Segment Set Operations
+
+The toolkit provides utility functions for combining segments from different detection sources:
+
+```
+Sound Segments (A)     Motion Segments (B)
+        \                    /
+         \                  /
+          v                v
+    +---------------------------+
+    | Set Operation Functions   |
+    +---------------------------+
+    | _union_segments(A, B)     |  -> A OR B
+    | _intersect_segments(A, B) |  -> A AND B
+    | _difference_segments(A, B)|  -> A - B
+    | _xor_segments(A, B)       |  -> (A OR B) - (A AND B)
+    | _complement_segments(A, D)|  -> NOT A (within duration D)
+    +---------------------------+
+              |
+              v
+      Combined Segments
+```
+
+**Algorithm: Union Segments**
+```
+1. Combine both segment lists
+2. Call _merge_overlapping_segments() to merge
+3. Return merged result
+```
+
+**Algorithm: Intersect Segments**
+```
+1. Convert to (start, end) pairs
+2. Use two-pointer technique
+3. For each pair of segments, find overlap: max(start1, start2) to min(end1, end2)
+4. Collect valid overlaps (where start < end)
+5. Return intersection result
+```
+
+**Algorithm: Difference Segments (A - B)**
+```
+1. For each segment in A:
+   - Start with full segment
+   - For each overlapping segment in B:
+     - If gap before B, add to result
+     - Move current position past B
+   - Add remaining portion after all B overlaps
+2. Return difference result
+```
+
+**Algorithm: XOR Segments**
+```
+1. Compute A - B (difference)
+2. Compute B - A (difference)
+3. Return union of both differences
+```
+
+**Algorithm: Complement Segments**
+```
+1. Merge input segments
+2. Start from time 0
+3. For each segment, add gap before it
+4. Add final gap to total_duration
+5. Return complement
 ```
 
 ---

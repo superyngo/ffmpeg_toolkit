@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from .ffmpeg_toolkit_core import FPRenderTasks
+from .ffmpeg_toolkit_core import FPRenderTasks, SegmentOperation
 from .ffmpeg_toolkit import FF_TASKS, PARTIAL_TASKS, BatchTask
 from . import ffmpeg_types as types
 
@@ -23,4 +23,5 @@ __all__: list[str] = [
     "FF_TASKS",
     "BatchTask",
     "FPRenderTasks",
+    "SegmentOperation",
 ]

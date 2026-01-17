@@ -614,6 +614,150 @@ function adjust_segments_pipe(segments, min_duration, total_duration, keyframes)
     return segments
 ```
 
+### Segment Set Operations
+
+These functions combine segments from different detection sources (e.g., silence and motion detection).
+
+#### Union Segments (A OR B)
+
+```pseudocode
+function union_segments(segs1, segs2):
+    if not segs1:
+        return merge_overlapping_segments(segs2) if segs2 else []
+    if not segs2:
+        return merge_overlapping_segments(segs1)
+
+    combined = segs1 + segs2
+    return merge_overlapping_segments(combined)
+```
+
+#### Intersect Segments (A AND B)
+
+```pseudocode
+function intersect_segments(segs1, segs2):
+    if not segs1 or not segs2:
+        return []
+
+    # Convert to (start, end) pairs
+    intervals1 = [(segs1[i], segs1[i+1]) for i in range(0, len(segs1), 2)]
+    intervals2 = [(segs2[i], segs2[i+1]) for i in range(0, len(segs2), 2)]
+
+    result = []
+    i, j = 0, 0
+
+    while i < len(intervals1) and j < len(intervals2):
+        start1, end1 = intervals1[i]
+        start2, end2 = intervals2[j]
+
+        # Find overlap
+        overlap_start = max(start1, start2)
+        overlap_end = min(end1, end2)
+
+        if overlap_start < overlap_end:
+            result.extend([overlap_start, overlap_end])
+
+        # Move pointer for interval that ends first
+        if end1 <= end2:
+            i += 1
+        else:
+            j += 1
+
+    return result
+```
+
+#### Difference Segments (A - B)
+
+```pseudocode
+function difference_segments(segs1, segs2):
+    if not segs1:
+        return []
+    if not segs2:
+        return merge_overlapping_segments(segs1)
+
+    intervals1 = [(segs1[i], segs1[i+1]) for i in range(0, len(segs1), 2)]
+    intervals2 = sorted([(segs2[i], segs2[i+1]) for i in range(0, len(segs2), 2)])
+
+    result = []
+
+    for start1, end1 in intervals1:
+        current_start = start1
+
+        for start2, end2 in intervals2:
+            if start2 >= end1:
+                break
+            if end2 <= current_start:
+                continue
+
+            # Add part before overlap
+            if start2 > current_start:
+                result.extend([current_start, start2])
+
+            # Move past overlap
+            current_start = max(current_start, end2)
+
+            if current_start >= end1:
+                break
+
+        # Add remaining part
+        if current_start < end1:
+            result.extend([current_start, end1])
+
+    return result
+```
+
+#### XOR Segments
+
+```pseudocode
+function xor_segments(segs1, segs2):
+    if not segs1:
+        return merge_overlapping_segments(segs2) if segs2 else []
+    if not segs2:
+        return merge_overlapping_segments(segs1)
+
+    # XOR = (A - B) union (B - A)
+    diff1 = difference_segments(segs1, segs2)
+    diff2 = difference_segments(segs2, segs1)
+    return union_segments(diff1, diff2)
+```
+
+#### Complement Segments
+
+```pseudocode
+function complement_segments(segs, total_duration):
+    if not segs:
+        return [0.0, total_duration] if total_duration > 0 else []
+
+    merged = merge_overlapping_segments(segs)
+    result = []
+    current_pos = 0.0
+
+    for i in range(0, len(merged), 2):
+        seg_start = merged[i]
+        seg_end = merged[i + 1]
+
+        if current_pos < seg_start:
+            result.extend([current_pos, seg_start])
+
+        current_pos = seg_end
+
+    if current_pos < total_duration:
+        result.extend([current_pos, total_duration])
+
+    return result
+```
+
+#### SegmentOperation Enum
+
+```pseudocode
+enum SegmentOperation:
+    UNION          # A OR B - sound or motion
+    INTERSECTION   # A AND B - sound and motion
+    SOUND_ONLY     # A - B - sound but not motion
+    MOTION_ONLY    # B - A - motion but not sound
+    XOR            # (A OR B) - (A AND B) - one but not both
+    COMPLEMENT     # NOT (A OR B) - neither sound nor motion
+```
+
 ---
 
 ## Implementation Checklist
@@ -661,6 +805,16 @@ function adjust_segments_pipe(segments, min_duration, total_duration, keyframes)
 - [ ] Implement CutSilenceRerender task
 - [ ] Implement CutMotionlessRerender task
 - [ ] Implement PartitionVideo task
+
+### Phase 5.5: Segment Set Operations
+
+- [ ] Implement union segments function
+- [ ] Implement intersect segments function
+- [ ] Implement difference segments function
+- [ ] Implement XOR segments function
+- [ ] Implement complement segments function
+- [ ] Implement SegmentOperation enum
+- [ ] Implement CutByDetection task
 
 ### Phase 6: Batch Processing
 
@@ -855,13 +1009,20 @@ fun ffmpeg(kwargs: FFKwargs): String {
 2. **Kwargs conversion** - Test all special mappings and empty values
 3. **Segment algorithms** - Test minimum length, keyframe alignment, overlap merging
 4. **Output parsers** - Test with sample FFmpeg output
+5. **Segment set operations** - Test union, intersection, difference, XOR, complement
+   - Empty segments handling
+   - Non-overlapping segments
+   - Fully overlapping segments
+   - Partial overlaps
+   - Multiple segments
 
 ### Integration Tests
 
 1. **Basic operations** - Cut, speedup, merge with actual video files
 2. **Detection** - Verify silence/motion detection accuracy
 3. **Complex workflows** - PartitionVideo with nested operations
-4. **Error handling** - Invalid files, missing FFmpeg, etc.
+4. **Combined detection** - CutByDetection with various set operations
+5. **Error handling** - Invalid files, missing FFmpeg, etc.
 
 ### Test Video Files
 

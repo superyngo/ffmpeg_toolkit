@@ -7,6 +7,7 @@ from .ffmpeg_toolkit_core import (
     DEFAULTS,
     Custom,
     Cut,
+    CutByDetection,
     CutMotionless,
     CutMotionlessRerender,
     CutSilence,
@@ -15,6 +16,7 @@ from .ffmpeg_toolkit_core import (
     Merge,
     PartitionVideo,
     PortionMethod,
+    SegmentOperation,
     Speedup,
 )
 from .ffmpeg_types import (
@@ -70,6 +72,7 @@ class FF_TASKS(ClassEnum):
         CutSilenceRerender: For removing silent segments with re-encoding
         CutMotionless: For removing motionless segments
         CutMotionlessRerender: For removing motionless segments with re-encoding
+        CutByDetection: For combined silence and motion detection with set operations
         PartitionVideo: For splitting videos into multiple parts
 
     Examples:
@@ -154,6 +157,7 @@ class FF_TASKS(ClassEnum):
     CutMotionlessRerender = CutMotionlessRerender
     CutSilence = CutSilence
     CutMotionless = CutMotionless
+    CutByDetection = CutByDetection
     PartitionVideo = PartitionVideo
 
 
@@ -520,6 +524,63 @@ class PARTIAL_TASKS(FunctionEnum):
                 "odd_further": odd_further,
             }
             return CutMotionless(**kwargs).override_option(options=options).render()
+
+        return _partial
+
+    @staticmethod
+    def cut_by_detection(
+        dB: int = DEFAULTS.db_threshold.value,
+        silence_sampling: float = DEFAULTS.sampling_duration.value,
+        motion_threshold: float = DEFAULTS.motionless_threshold.value,
+        motion_sampling: float = DEFAULTS.sampling_duration.value,
+        operation: SegmentOperation = SegmentOperation.UNION,
+        seg_min_duration: float = DEFAULTS.seg_min_duration.value,
+        even_further: FurtherMethod = "remove",
+        odd_further: FurtherMethod = None,
+    ) -> PARTIAL_TASK:
+        """Create a partially configured combined detection cutting function.
+
+        Combines silence detection and motion detection using set operations
+        to create flexible content selection criteria.
+
+        Args:
+            dB: Audio threshold level in dB for identifying silence
+            silence_sampling: Duration between silence samples in seconds
+            motion_threshold: Scene change threshold for identifying motion
+            motion_sampling: Duration between motion samples in seconds
+            operation: Set operation to combine detection results
+                       - UNION: sound OR motion (keeps most content)
+                       - INTERSECTION: sound AND motion (keeps highlights)
+                       - SOUND_ONLY: sound but NOT motion
+                       - MOTION_ONLY: motion but NOT sound
+                       - XOR: sound XOR motion
+                       - COMPLEMENT: NOT (sound OR motion)
+            seg_min_duration: Minimum duration of segments to keep in seconds
+            even_further: Processing method for even segments
+            odd_further: Processing method for odd segments
+
+        Returns:
+            Function that processes video using combined detection criteria
+        """
+
+        def _partial(
+            input_file: str | Path,
+            output_file: str | Path,
+            options: OptionFFRender | None = None,
+        ):
+            kwargs = {
+                "input_file": input_file,
+                "output_file": output_file,
+                "dB": dB,
+                "silence_sampling": silence_sampling,
+                "motion_threshold": motion_threshold,
+                "motion_sampling": motion_sampling,
+                "operation": operation,
+                "seg_min_duration": seg_min_duration,
+                "even_further": even_further,
+                "odd_further": odd_further,
+            }
+            return CutByDetection(**kwargs).override_option(options=options).render()
 
         return _partial
 

@@ -172,6 +172,7 @@ class _TASKS(StrEnum):
     CUT_SILENCE_RERENDER = auto()
     CUT_MOTIONLESS = auto()
     CUT_MOTIONLESS_RERENDER = auto()
+    CUT_BY_DETECTION = auto()
     SPLIT = auto()
     PARTITION = auto()
 
@@ -185,6 +186,29 @@ class _PROBE_TASKS(StrEnum):
     KEYFRAMES = auto()
     NON_SILENCE_SEGS = auto()
     FRAMES_PER_SECOND = auto()
+
+
+class SegmentOperation(StrEnum):
+    """Enumeration of segment set operations for combining detection results.
+
+    These operations combine segments from silence detection and motion detection
+    to create different types of composite selections.
+
+    Attributes:
+        UNION: A OR B - segments with sound OR motion (keeps most content)
+        INTERSECTION: A AND B - segments with sound AND motion (keeps only highlights)
+        SOUND_ONLY: A - B - segments with sound but no motion
+        MOTION_ONLY: B - A - segments with motion but no sound
+        XOR: (A OR B) - (A AND B) - segments with sound or motion, but not both
+        COMPLEMENT: NOT (A OR B) - segments with neither sound nor motion
+    """
+
+    UNION = auto()
+    INTERSECTION = auto()
+    SOUND_ONLY = auto()
+    MOTION_ONLY = auto()
+    XOR = auto()
+    COMPLEMENT = auto()
 
 
 def _create_ff_kwargs(
@@ -1628,6 +1652,204 @@ class CutMotionless(FFCreateTask):
             raise e
 
 
+class CutByDetection(FFCreateTask):
+    """
+    Class for cutting video based on combined silence and motion detection.
+
+    This class combines segments from silence detection and motion detection
+    using various set operations (union, intersection, difference, etc.)
+    to create flexible content selection criteria.
+
+    Attributes:
+        dB: Audio threshold level in dB for identifying silence
+        silence_sampling: Duration between silence samples in seconds
+        motion_threshold: Scene change threshold for detecting motion
+        motion_sampling: Duration between motion samples in seconds
+        operation: Set operation to combine the detection results
+        seg_min_duration: Minimum duration of segments to keep
+        even_further: Processing method for even segments
+        odd_further: Processing method for odd segments
+
+    Examples:
+        Keep segments with sound OR motion (union - keeps most content):
+        ```python
+        CutByDetection(
+            input_file="input.mp4",
+            operation=SegmentOperation.UNION
+        ).render()
+        ```
+
+        Keep only segments with sound AND motion (intersection - highlights):
+        ```python
+        CutByDetection(
+            input_file="input.mp4",
+            operation=SegmentOperation.INTERSECTION
+        ).render()
+        ```
+
+        Extract silent but moving segments (motion only):
+        ```python
+        CutByDetection(
+            input_file="input.mp4",
+            operation=SegmentOperation.MOTION_ONLY
+        ).render()
+        ```
+    """
+
+    # Silence detection parameters
+    dB: int = DEFAULTS.db_threshold.value
+    silence_sampling: float = DEFAULTS.sampling_duration.value
+
+    # Motion detection parameters
+    motion_threshold: float = DEFAULTS.motionless_threshold.value
+    motion_sampling: float = DEFAULTS.sampling_duration.value
+
+    # Set operation
+    operation: SegmentOperation = SegmentOperation.UNION
+
+    # Segment processing
+    seg_min_duration: float = DEFAULTS.seg_min_duration.value
+    even_further: FurtherMethod = "remove"
+    odd_further: FurtherMethod = None
+
+    def model_post_init(self, *args, **kwargs):
+        """Initialize the task description and handle file paths."""
+        self.task_description = (
+            f"{_TASKS.CUT_BY_DETECTION}_{self.operation.value}"
+        )
+        # Handle input and output file path
+        self.input_file = Path(self.input_file)
+        self.output_file = _handle_output_file_path(
+            self.input_file,
+            self.output_file,
+            self.task_description,
+            self.valid_extensions,
+        )
+
+    def _apply_operation(
+        self,
+        sound_segments: list[float],
+        motion_segments: list[float],
+        total_duration: float,
+    ) -> list[float]:
+        """Apply the configured set operation to combine detection results.
+
+        Args:
+            sound_segments: Segments with detected sound
+            motion_segments: Segments with detected motion
+            total_duration: Total duration of the video
+
+        Returns:
+            Combined segments based on the configured operation
+        """
+        match self.operation:
+            case SegmentOperation.UNION:
+                # Sound OR Motion
+                return _union_segments(sound_segments, motion_segments)
+            case SegmentOperation.INTERSECTION:
+                # Sound AND Motion
+                return _intersect_segments(sound_segments, motion_segments)
+            case SegmentOperation.SOUND_ONLY:
+                # Sound but NOT Motion
+                return _difference_segments(sound_segments, motion_segments)
+            case SegmentOperation.MOTION_ONLY:
+                # Motion but NOT Sound
+                return _difference_segments(motion_segments, sound_segments)
+            case SegmentOperation.XOR:
+                # Sound XOR Motion
+                return _xor_segments(sound_segments, motion_segments)
+            case SegmentOperation.COMPLEMENT:
+                # NOT (Sound OR Motion)
+                union = _union_segments(sound_segments, motion_segments)
+                return _complement_segments(union, total_duration)
+            case _:
+                raise ValueError(f"Unknown operation: {self.operation}")
+
+    @timing
+    def render(self) -> Path | ERROR_CODE:  # type: ignore
+        """
+        Process the video by detecting silence and motion, then applying set operation.
+
+        Returns:
+            Path: Path to the output file
+            ERROR_CODE: In case of processing error
+        """
+        logger.info(
+            f"{self.task_description.capitalize()} {self.input_file} to {self.output_file} "
+            f"with {self.dB = }, {self.motion_threshold = }, "
+            f"operation={self.operation.value}, {self.seg_min_duration = }."
+        )
+
+        # Step 1: Extract non-silence (sound) segments
+        non_silence_str: str = str(
+            _GetSilenceSegments(
+                input_file=self.input_file,
+                dB=self.dB,
+                sampling_duration=self.silence_sampling,
+            ).render()
+        )
+        sound_segments, total_duration, _ = _extract_non_silence_info(non_silence_str)
+
+        # Step 2: Extract motion segments
+        motion_str: str = str(
+            _GetMotionSegments(
+                input_file=self.input_file,
+                sampling_duration=self.motion_sampling,
+            ).render()
+        )
+        motion_info, _ = _extract_motion_info(motion_str)
+        motion_segments = _extract_motion_segments(motion_info, self.motion_threshold)
+
+        # Ensure motion segments start from 0 and end at total_duration
+        if motion_segments and motion_segments[0] != 0.0:
+            motion_segments = [0.0] + motion_segments
+        if motion_segments and motion_segments[-1] != total_duration:
+            motion_segments = motion_segments + [total_duration]
+
+        # Step 3: Apply set operation
+        combined_segments = self._apply_operation(
+            sound_segments, motion_segments, total_duration
+        )
+
+        if not combined_segments:
+            logger.error(f"No valid segments found for {self.input_file}.")
+            return ERROR_CODE.NO_VALID_SEGMENTS
+
+        # Step 4: Extract keyframes
+        keyframes = FPRenderTasks().keyframes(self.input_file).render()
+
+        # Step 5: Adjust segments
+        adjusted_segments_config = AdjustSegmentsConfig(
+            segments=combined_segments,
+            seg_min_duration=self.seg_min_duration,
+            total_duration=total_duration,
+            keyframes=keyframes,
+        )
+        adjusted_segments: list[float] = _adjust_segments_pipe(adjusted_segments_config)
+
+        if adjusted_segments == []:
+            logger.error(f"No valid segments found for {self.input_file}.")
+            return ERROR_CODE.NO_VALID_SEGMENTS
+
+        try:
+            # Step 6: Perform keep or remove by split segments
+            output_file = KeepOrRemove(
+                input_file=self.input_file,
+                output_file=self.output_file,
+                video_segments=adjusted_segments,
+                even_further=self.even_further,
+                odd_further=self.odd_further,
+                delete_after=self.delete_after,
+            ).render()
+            return output_file  # type: ignore
+
+        except Exception as e:
+            logger.error(
+                f"Failed to {self.task_description} for {self.input_file}. Error: {e}"
+            )
+            raise e
+
+
 # For PartitionVideo
 def _get_segments_from_parts_count(
     duration: float | str, parts_count: int, portion: Optional[list[int]] = None
@@ -1987,6 +2209,186 @@ def _merge_overlapping_segments(segments: list[float]) -> list[float]:
     merged_segments.extend([current_start, current_end])
 
     return merged_segments
+
+
+def _union_segments(segs1: list[float], segs2: list[float]) -> list[float]:
+    """Union operation: merge two sets of segments (A OR B).
+
+    Combines two sets of segments, returning all time intervals that are
+    covered by either set. Overlapping segments are merged together.
+
+    Args:
+        segs1: First list of segment boundaries (start1, end1, start2, end2, ...)
+        segs2: Second list of segment boundaries
+
+    Returns:
+        List of merged segment boundaries representing the union of both sets
+    """
+    if not segs1:
+        return _merge_overlapping_segments(segs2) if segs2 else []
+    if not segs2:
+        return _merge_overlapping_segments(segs1)
+
+    combined = segs1 + segs2
+    return _merge_overlapping_segments(combined)
+
+
+def _intersect_segments(segs1: list[float], segs2: list[float]) -> list[float]:
+    """Intersection operation: get overlapping parts of two segment sets (A AND B).
+
+    Returns only the time intervals that are covered by both segment sets.
+
+    Args:
+        segs1: First list of segment boundaries (start1, end1, start2, end2, ...)
+        segs2: Second list of segment boundaries
+
+    Returns:
+        List of segment boundaries representing the intersection of both sets
+    """
+    if not segs1 or not segs2:
+        return []
+
+    # Convert to list of (start, end) tuples
+    intervals1 = [(segs1[i], segs1[i + 1]) for i in range(0, len(segs1), 2)]
+    intervals2 = [(segs2[i], segs2[i + 1]) for i in range(0, len(segs2), 2)]
+
+    result = []
+    i, j = 0, 0
+
+    while i < len(intervals1) and j < len(intervals2):
+        start1, end1 = intervals1[i]
+        start2, end2 = intervals2[j]
+
+        # Find overlap
+        overlap_start = max(start1, start2)
+        overlap_end = min(end1, end2)
+
+        if overlap_start < overlap_end:
+            result.extend([overlap_start, overlap_end])
+
+        # Move the pointer for the interval that ends first
+        if end1 <= end2:
+            i += 1
+        else:
+            j += 1
+
+    return result
+
+
+def _difference_segments(segs1: list[float], segs2: list[float]) -> list[float]:
+    """Difference operation: get parts of segs1 not covered by segs2 (A - B).
+
+    Returns the time intervals that are in segs1 but not in segs2.
+
+    Args:
+        segs1: First list of segment boundaries (start1, end1, start2, end2, ...)
+        segs2: Second list of segment boundaries to subtract
+
+    Returns:
+        List of segment boundaries representing segs1 minus segs2
+    """
+    if not segs1:
+        return []
+    if not segs2:
+        return _merge_overlapping_segments(segs1)
+
+    # Convert to list of (start, end) tuples
+    intervals1 = [(segs1[i], segs1[i + 1]) for i in range(0, len(segs1), 2)]
+    intervals2 = sorted(
+        [(segs2[i], segs2[i + 1]) for i in range(0, len(segs2), 2)]
+    )
+
+    result = []
+
+    for start1, end1 in intervals1:
+        current_start = start1
+
+        for start2, end2 in intervals2:
+            if start2 >= end1:
+                # No more overlaps possible for this interval
+                break
+            if end2 <= current_start:
+                # This interval2 is completely before current position
+                continue
+
+            # There is an overlap
+            if start2 > current_start:
+                # Add the part before the overlap
+                result.extend([current_start, start2])
+
+            # Move past the overlap
+            current_start = max(current_start, end2)
+
+            if current_start >= end1:
+                break
+
+        # Add remaining part of interval1
+        if current_start < end1:
+            result.extend([current_start, end1])
+
+    return result
+
+
+def _xor_segments(segs1: list[float], segs2: list[float]) -> list[float]:
+    """XOR operation: get parts in either set but not both ((A OR B) - (A AND B)).
+
+    Returns the time intervals that are in exactly one of the two segment sets,
+    but not in both.
+
+    Args:
+        segs1: First list of segment boundaries (start1, end1, start2, end2, ...)
+        segs2: Second list of segment boundaries
+
+    Returns:
+        List of segment boundaries representing the symmetric difference
+    """
+    if not segs1:
+        return _merge_overlapping_segments(segs2) if segs2 else []
+    if not segs2:
+        return _merge_overlapping_segments(segs1)
+
+    # XOR = (A - B) union (B - A)
+    diff1 = _difference_segments(segs1, segs2)
+    diff2 = _difference_segments(segs2, segs1)
+    return _union_segments(diff1, diff2)
+
+
+def _complement_segments(segs: list[float], total_duration: float) -> list[float]:
+    """Complement operation: get all time intervals not covered by segs.
+
+    Returns the time intervals from 0 to total_duration that are not
+    covered by any segment in segs.
+
+    Args:
+        segs: List of segment boundaries (start1, end1, start2, end2, ...)
+        total_duration: Total duration of the video in seconds
+
+    Returns:
+        List of segment boundaries representing the complement of segs
+    """
+    if not segs:
+        return [0.0, total_duration] if total_duration > 0 else []
+
+    # Merge overlapping segments first
+    merged = _merge_overlapping_segments(segs)
+
+    result = []
+    current_pos = 0.0
+
+    for i in range(0, len(merged), 2):
+        seg_start = merged[i]
+        seg_end = merged[i + 1]
+
+        if current_pos < seg_start:
+            result.extend([current_pos, seg_start])
+
+        current_pos = seg_end
+
+    # Add remaining part after last segment
+    if current_pos < total_duration:
+        result.extend([current_pos, total_duration])
+
+    return result
 
 
 def _adjust_segments_pipe(

@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **2026-01-17**: Added segment set operations feature for combining silence and motion detection
+  - New utility functions for segment set operations:
+    - `_union_segments()` - Union of two segment sets (A OR B)
+    - `_intersect_segments()` - Intersection of two segment sets (A AND B)
+    - `_difference_segments()` - Difference of two segment sets (A - B)
+    - `_xor_segments()` - Symmetric difference (XOR) of two segment sets
+    - `_complement_segments()` - Complement of a segment set
+  - New `SegmentOperation` enum with operations: UNION, INTERSECTION, SOUND_ONLY, MOTION_ONLY, XOR, COMPLEMENT
+  - New `CutByDetection` task class for combined silence and motion detection with set operations
+  - New `PARTIAL_TASKS.cut_by_detection()` factory method
+  - Export `SegmentOperation` from package `__init__.py`
+
 ## [0.2.2] - 2026-01-17
 
 ### Added
