@@ -148,6 +148,10 @@ class VideoSuffix(StrEnum):
     MP4 = auto()
     MKV = auto()
     AVI = auto()
+    MOV = auto()
+    WEBM = auto()
+    M4V = auto()
+    TS = auto()
 
 
 type ValidExtensions = set[VideoSuffix] | set[str]
@@ -191,7 +195,7 @@ class OptionFFRender(TypedDict):
         post_hook (Callable[..., Any], optional): Function to process results after command execution
     """
 
-    task_descripton: NotRequired[str]
+    task_description: NotRequired[str]
     delete_after: NotRequired[bool]
     exception: NotRequired[FFRenderException]
     post_hook: NotRequired[Callable[..., Any]]

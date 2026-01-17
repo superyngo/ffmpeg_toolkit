@@ -1,13 +1,26 @@
 [project]
 name = "ffmpeg-toolkit"
 version = "0.2.1"
-description = "Add your description here"
+description = "A comprehensive Python toolkit for video processing using FFmpeg"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "pydantic>=2.11.3",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+]
+
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v"

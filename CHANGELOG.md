@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **2026-01-17**: Added comprehensive documentation files:
+  - `ARCHITECTURE.md` - Technical architecture documentation with class hierarchy, core concepts, and implementation details
+  - `PORTING_GUIDE.md` - Guide for porting the toolkit to other programming languages/platforms
+- **2026-01-17**: Added comprehensive test suite with pytest (`test/test_ffmpeg_toolkit.py`)
+  - Unit tests for timestamp conversion, kwargs generation, segment processing
+  - Mocked tests for FFmpeg/FFprobe execution
+  - Tests for Pydantic model initialization and validation
+- **2026-01-17**: Added missing video format extensions to `VideoSuffix` enum:
+  - MOV, WEBM, M4V, TS
+
+### Fixed
+
+- **2026-01-17**: Fixed typo `task_descripton` -> `task_description` across all files
+  - `ffmpeg_types.py`: `OptionFFRender` TypedDict
+  - `ffmpeg_toolkit_core.py`: `FPCreateRender` and `FFCreateTask` classes and all usages
+- **2026-01-17**: Fixed typo `_defalut_output_kwargs` -> `_default_output_kwargs` in ffmpeg_toolkit_core.py
+- **2026-01-17**: Fixed typo `defalut_output_kwargs` -> `default_output_kwargs` in probe methods
+- **2026-01-17**: Fixed comment typos:
+  - `# Exception hadling` -> `# Exception handling`
+  - `# Error hadling` -> `# Error handling`
+  - `# Handle inout and output file path` -> `# Handle input and output file path`
+
+### Improved
+
+- **2026-01-17**: Added `FileNotFoundError` handling in `_ffmpeg()` and `_ffprobe()` functions
+  - Now provides clear error message when FFmpeg/FFprobe executables are not found in PATH
+
 ## [0.2.1] - 2025-06-04
 
 ### Fixed

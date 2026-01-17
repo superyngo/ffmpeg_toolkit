@@ -302,6 +302,7 @@ def _ffmpeg(**ffkwargs) -> subprocess.CompletedProcess[str]:
 
     Raises:
         subprocess.CalledProcessError: If FFmpeg command fails
+        FileNotFoundError: If ffmpeg executable is not found in PATH
     """
     command = ["ffmpeg"] + _dic_to_ffmpeg_kwargs(ffkwargs)
     logger.info(f"Executing FFmpeg command: {' '.join(command)}")
@@ -310,6 +311,11 @@ def _ffmpeg(**ffkwargs) -> subprocess.CompletedProcess[str]:
             command, capture_output=True, text=True, check=True, encoding="utf-8"
         )
         return result
+    except FileNotFoundError as e:
+        logger.error("FFmpeg not found. Please ensure FFmpeg is installed and in your PATH.")
+        raise FileNotFoundError(
+            "FFmpeg executable not found. Please install FFmpeg and ensure it is in your system PATH."
+        ) from e
     except subprocess.CalledProcessError as e:
         logger.error(f"Failed to execute FFmpeg. Error: {e}")
         raise e
@@ -327,6 +333,7 @@ def _ffprobe(**ffkwargs):
 
     Raises:
         subprocess.CalledProcessError: If FFprobe command fails
+        FileNotFoundError: If ffprobe executable is not found in PATH
     """
     command = ["ffprobe"] + _dic_to_ffmpeg_kwargs(ffkwargs)
     logger.info(f"Executing ffprobe command: {' '.join(command)}")
@@ -335,6 +342,11 @@ def _ffprobe(**ffkwargs):
             command, capture_output=True, text=True, check=True, encoding="utf-8"
         )
         return result
+    except FileNotFoundError as e:
+        logger.error("FFprobe not found. Please ensure FFprobe is installed and in your PATH.")
+        raise FileNotFoundError(
+            "FFprobe executable not found. Please install FFprobe (bundled with FFmpeg) and ensure it is in your system PATH."
+        ) from e
     except subprocess.CalledProcessError as e:
         logger.error(f"Failed to execute ffprobe. Error: {e}")
         raise e
@@ -418,7 +430,7 @@ class FPCreateRender(FPCreateCommand):
         post_hook: Function to process results after command execution
     """
 
-    task_descripton: str = "probe"
+    task_description: str = "probe"
     exception: Optional[FFRenderException] = None
     post_hook: Optional[Callable[..., Any]] = None
 
@@ -433,7 +445,7 @@ class FPCreateRender(FPCreateCommand):
         """
         self.input_file = Path(self.input_file)
 
-        # Exception hadling
+        # Exception handling
         if self.exception is not None:
             logger.error(self.exception["message"])
             self.exception.get("hook", lambda: None)()
@@ -442,7 +454,7 @@ class FPCreateRender(FPCreateCommand):
         ff_kwargs: FFKwargs = _create_fp_kwargs(**(self.model_dump()))
 
         logger.info(
-            f"{self.task_descripton.capitalize()} {self.input_file.name}  with {ff_kwargs}"
+            f"{self.task_description.capitalize()} {self.input_file.name}  with {ff_kwargs}"
         )
 
         try:
@@ -456,7 +468,7 @@ class FPCreateRender(FPCreateCommand):
             return stripped_result
         except Exception as e:
             logger.error(
-                f"Failed to do {self.task_descripton} videos for {self.input_file}. Error: {e}"
+                f"Failed to do {self.task_description} videos for {self.input_file}. Error: {e}"
             )
             raise e
 
@@ -484,18 +496,18 @@ class FPRenderTasks(FPCreateRender):
         Returns:
             Self for method chaining
         """
-        defalut_output_kwargs: FFKwargs = {
+        default_output_kwargs: FFKwargs = {
             "v": "error",
             "print_format": "json",
             "show_format": "",
             "show_streams": "",
             "i": input_file,
         }
-        self.task_descripton = _PROBE_TASKS.ENCODING
+        self.task_description = _PROBE_TASKS.ENCODING
         self.input_file = input_file
         if input_kwargs is not None:
             self.input_kwargs = input_kwargs
-        self.output_kwargs = defalut_output_kwargs | (
+        self.output_kwargs = default_output_kwargs | (
             {} if output_kwargs is None else output_kwargs
         )
 
@@ -561,17 +573,17 @@ class FPRenderTasks(FPCreateRender):
         Returns:
             Self for method chaining
         """
-        defalut_output_kwargs: FFKwargs = {
+        default_output_kwargs: FFKwargs = {
             "v": "error",
             "show_entries": "format=duration",
             "of": "default=noprint_wrappers=1:nokey=1",
             "i": input_file,
         }
-        self.task_descripton = _PROBE_TASKS.IS_VALID_VIDEO
+        self.task_description = _PROBE_TASKS.IS_VALID_VIDEO
         self.input_file = input_file
         if input_kwargs is not None:
             self.input_kwargs = input_kwargs
-        self.output_kwargs = defalut_output_kwargs | (
+        self.output_kwargs = default_output_kwargs | (
             {} if output_kwargs is None else output_kwargs
         )
 
@@ -604,17 +616,17 @@ class FPRenderTasks(FPCreateRender):
         Returns:
             Self for method chaining
         """
-        defalut_output_kwargs: FFKwargs = {
+        default_output_kwargs: FFKwargs = {
             "v": "error",
             "show_entries": "format=duration",
             "of": "default=noprint_wrappers=1:nokey=1",
             "i": input_file,
         }
-        self.task_descripton = _PROBE_TASKS.DURATION
+        self.task_description = _PROBE_TASKS.DURATION
         self.input_file = input_file
         if input_kwargs is not None:
             self.input_kwargs = input_kwargs
-        self.output_kwargs = defalut_output_kwargs | (
+        self.output_kwargs = default_output_kwargs | (
             {} if output_kwargs is None else output_kwargs
         )
 
@@ -641,18 +653,18 @@ class FPRenderTasks(FPCreateRender):
         Returns:
             Self for method chaining
         """
-        defalut_output_kwargs: FFKwargs = {
+        default_output_kwargs: FFKwargs = {
             "v": "error",
             "select_streams": "v:0",
             "show_entries": "packet=pts_time,flags",
             "of": "json",
             "i": input_file,
         }
-        self.task_descripton = _PROBE_TASKS.KEYFRAMES
+        self.task_description = _PROBE_TASKS.KEYFRAMES
         self.input_file = input_file
         if input_kwargs is not None:
             self.input_kwargs = input_kwargs
-        self.output_kwargs = defalut_output_kwargs | (
+        self.output_kwargs = default_output_kwargs | (
             {} if output_kwargs is None else output_kwargs
         )
 
@@ -685,18 +697,18 @@ class FPRenderTasks(FPCreateRender):
         Returns:
             Self for method chaining
         """
-        defalut_output_kwargs: FFKwargs = {
+        default_output_kwargs: FFKwargs = {
             "v": "error",
             "select_streams": "v",
             "show_entries": "stream=r_frame_rate",
             "of": "csv=p=0",
             "i": input_file,
         }
-        self.task_descripton = _PROBE_TASKS.FRAMES_PER_SECOND
+        self.task_description = _PROBE_TASKS.FRAMES_PER_SECOND
         self.input_file = input_file
         if input_kwargs is not None:
             self.input_kwargs = input_kwargs
-        self.output_kwargs = defalut_output_kwargs | (
+        self.output_kwargs = default_output_kwargs | (
             {} if output_kwargs is None else output_kwargs
         )
 
@@ -738,7 +750,7 @@ class FFCreateTask(FFCreateCommand):
         post_hook: Function to process results after command execution
     """
 
-    task_descripton: str = "render"
+    task_description: str = "render"
     delete_after: bool = False
     exception: FFRenderException | None = None
     post_hook: Callable[..., Any] | None = None
@@ -770,12 +782,12 @@ class FFCreateTask(FFCreateCommand):
         Raises:
             Exception: If the FFmpeg command fails
         """
-        # Handle inout and output file path
+        # Handle input and output file path
         self.input_file = Path(self.input_file)
         self.output_file = _handle_output_file_path(
             self.input_file,
             self.output_file,
-            self.task_descripton,
+            self.task_description,
             self.valid_extensions,
         )
         # Handle temp output file path
@@ -786,7 +798,7 @@ class FFCreateTask(FFCreateCommand):
                 self.output_file.stem + "_processing" + self.output_file.suffix
             )
 
-        # Exception hadling
+        # Exception handling
         if self.exception is not None:
             logger.error(self.exception["message"])
             self.exception.get("hook", lambda: None)()
@@ -797,7 +809,7 @@ class FFCreateTask(FFCreateCommand):
         )
 
         logger.info(
-            f"{self.task_descripton.capitalize()} {self.input_file.name} to {self.output_file.name} with {ff_kwargs}"
+            f"{self.task_description.capitalize()} {self.input_file.name} to {self.output_file.name} with {ff_kwargs}"
         )
 
         try:
@@ -817,7 +829,7 @@ class FFCreateTask(FFCreateCommand):
             return self.output_file
         except Exception as e:
             logger.error(
-                f"Failed to do {self.task_descripton} videos for {self.input_file}. Error: {e}"
+                f"Failed to do {self.task_description} videos for {self.input_file}. Error: {e}"
             )
             raise e
 
@@ -844,12 +856,12 @@ class Cut(FFCreateTask):
 
     def model_post_init(self, *args, **kwargs) -> None:
         """Initialize task description and output arguments after model creation."""
-        self.task_descripton = f"{_TASKS.CUT}_{_convert_timestamp_to_seconds(self.ss)}-{_convert_timestamp_to_seconds(self.to)}"
-        _defalut_output_kwargs: FFKwargs = {
+        self.task_description = f"{_TASKS.CUT}_{_convert_timestamp_to_seconds(self.ss)}-{_convert_timestamp_to_seconds(self.to)}"
+        _default_output_kwargs: FFKwargs = {
             "ss": self.ss,
             "to": self.to,
         } | ({} if self.rerender else {"c:v": "copy", "c:a": "copy"})
-        self.output_kwargs = _defalut_output_kwargs | self.output_kwargs
+        self.output_kwargs = _default_output_kwargs | self.output_kwargs
 
 
 class Speedup(FFCreateTask):
@@ -863,8 +875,8 @@ class Speedup(FFCreateTask):
 
     def model_post_init(self, *args, **kwargs):
         """Initialize task description, output arguments, and handle error cases after model creation."""
-        self.task_descripton = f"{_TASKS.SPEEDUP}_by_{self.multiple}"
-        _defalut_output_kwargs: FFKwargs = _create_speedup_kwargs(self.multiple)
+        self.task_description = f"{_TASKS.SPEEDUP}_by_{self.multiple}"
+        _default_output_kwargs: FFKwargs = _create_speedup_kwargs(self.multiple)
         if self.multiple == 1 and self.input_file != self.output_file:
             self.exception = {
                 "code": 0,
@@ -875,7 +887,7 @@ class Speedup(FFCreateTask):
                 "code": 1,
                 "message": "Speedup factor must be greater than 0.",
             }
-        self.output_kwargs = _defalut_output_kwargs | self.output_kwargs
+        self.output_kwargs = _default_output_kwargs | self.output_kwargs
 
 
 class Jumpcut(FFCreateTask):
@@ -897,11 +909,11 @@ class Jumpcut(FFCreateTask):
 
     def model_post_init(self, *args, **kwargs):
         """Initialize task description, output arguments, and handle error cases after model creation."""
-        self.task_descripton = f"{_TASKS.JUMPCUT}_b1({self.b1_duration}x{self.b1_multiple})_b2({self.b2_duration}x{self.b2_multiple})"
-        _defalut_output_kwargs: FFKwargs = _create_jumpcut_kwargs(
+        self.task_description = f"{_TASKS.JUMPCUT}_b1({self.b1_duration}x{self.b1_multiple})_b2({self.b2_duration}x{self.b2_multiple})"
+        _default_output_kwargs: FFKwargs = _create_jumpcut_kwargs(
             self.b1_duration, self.b2_duration, self.b1_multiple, self.b2_multiple
         )
-        self.output_kwargs = _defalut_output_kwargs | self.output_kwargs
+        self.output_kwargs = _default_output_kwargs | self.output_kwargs
 
         # Error handling
         if any((self.b1_duration <= 0, self.b2_duration <= 0)):
@@ -927,9 +939,9 @@ class Merge(FFCreateTask):
 
     def model_post_init(self, *args, **kwargs):
         """Initialize task description, prepare input text file, and set cleanup post-task after model creation."""
-        self.task_descripton = _TASKS.MERGE
+        self.task_description = _TASKS.MERGE
         _defalut_input_kwargs: FFKwargs = {"f": "concat", "safe": 0}
-        _defalut_output_kwargs: FFKwargs = {"c:a": "copy", "c:v": "copy"}
+        _default_output_kwargs: FFKwargs = {"c:a": "copy", "c:v": "copy"}
         self.input_dir_or_files = (
             [Path(p) for p in self.input_dir_or_files]
             if isinstance(self.input_dir_or_files, list)
@@ -940,7 +952,7 @@ class Merge(FFCreateTask):
         )
         self.input_file = input_txt
         self.input_kwargs = _defalut_input_kwargs | self.input_kwargs
-        self.output_kwargs = _defalut_output_kwargs | self.output_kwargs
+        self.output_kwargs = _default_output_kwargs | self.output_kwargs
 
         def post_hook(_result):
             os.remove(input_txt)
@@ -964,11 +976,11 @@ class CutSilenceRerender(FFCreateTask):
 
     def model_post_init(self, *args, **kwargs):
         """Initialize task description, output arguments, and set cleanup post-task after model creation."""
-        self.task_descripton = f"{_TASKS.CUT_SILENCE_RERENDER}_by_{self.dB}"
-        _defalut_output_kwargs: FFKwargs = _create_cut_sl_kwargs(
+        self.task_description = f"{_TASKS.CUT_SILENCE_RERENDER}_by_{self.dB}"
+        _default_output_kwargs: FFKwargs = _create_cut_sl_kwargs(
             self.input_file, self.dB, self.sampling_duration
         )
-        self.output_kwargs = _defalut_output_kwargs | self.output_kwargs
+        self.output_kwargs = _default_output_kwargs | self.output_kwargs
 
         def post_hook(_result):
             os.remove(str(self.output_kwargs["filter_script:v"]))
@@ -990,11 +1002,11 @@ class CutMotionlessRerender(FFCreateTask):
 
     def model_post_init(self, *args, **kwargs):
         """Initialize task description, output arguments, and set cleanup post-task after model creation."""
-        self.task_descripton = f"{_TASKS.CUT_MOTIONLESS_RERENDER}_by_{self.threshold}"
-        _defalut_output_kwargs: FFKwargs = _create_cut_motionless_kwargs(
+        self.task_description = f"{_TASKS.CUT_MOTIONLESS_RERENDER}_by_{self.threshold}"
+        _default_output_kwargs: FFKwargs = _create_cut_motionless_kwargs(
             self.input_file, self.threshold, self.sampling_duration
         )
-        self.output_kwargs = _defalut_output_kwargs | self.output_kwargs
+        self.output_kwargs = _default_output_kwargs | self.output_kwargs
 
         def post_hook(_result) -> Path:
             os.remove(str(self.output_kwargs["filter_script:v"]))
@@ -1017,9 +1029,9 @@ class SplitSegments(FFCreateTask):
 
     def model_post_init(self, *args, **kwargs):
         """Initialize task description, output directory, and handle empty segments case after model creation."""
-        self.task_descripton = _TASKS.SPLIT
+        self.task_description = _TASKS.SPLIT
         self.input_file = Path(self.input_file)
-        _defalut_output_kwargs: FFKwargs = {
+        _default_output_kwargs: FFKwargs = {
             "c:v": "copy",
             "c:a": "copy",
             "f": "segment",
@@ -1030,7 +1042,7 @@ class SplitSegments(FFCreateTask):
         if self.output_dir is None:
             self.output_dir = (
                 self.input_file.parent
-                / f"{self.input_file.stem}_{self.task_descripton}"
+                / f"{self.input_file.stem}_{self.task_description}"
             )
         else:
             self.output_dir = Path(self.output_dir)
@@ -1038,7 +1050,7 @@ class SplitSegments(FFCreateTask):
         self.output_file = (
             f"{self.output_dir}/%d_{self.input_file.stem}{self.input_file.suffix}"
         )
-        self.output_kwargs = _defalut_output_kwargs | self.output_kwargs
+        self.output_kwargs = _default_output_kwargs | self.output_kwargs
 
         if len(self.video_segments) == 0:
             self.exception = {
@@ -1064,15 +1076,15 @@ class _GetSilenceSegments(FFCreateTask):
 
     def model_post_init(self, *args, **kwargs):
         """Initialize task description and output arguments after model creation."""
-        self.task_descripton = f"{_TASKS.GET_NON_SILENCE_SEGS}_by_{self.dB}"
-        _defalut_output_kwargs: FFKwargs = {
+        self.task_description = f"{_TASKS.GET_NON_SILENCE_SEGS}_by_{self.dB}"
+        _default_output_kwargs: FFKwargs = {
             "af": f"silencedetect=n={self.dB}dB:d={self.sampling_duration}",
             "vn": "",
             "loglevel": "info",
             "f": "null",
         }
         self.output_file = "-"
-        self.output_kwargs = _defalut_output_kwargs | self.output_kwargs
+        self.output_kwargs = _default_output_kwargs | self.output_kwargs
 
         def post_hook(_result):
             return _result.stdout.strip() + _result.stderr.strip()
@@ -1091,16 +1103,16 @@ class _GetMotionSegments(FFCreateTask):
 
     def model_post_init(self, *args, **kwargs):
         """Initialize task description and output arguments after model creation."""
-        self.task_descripton = _TASKS.GET_MOTION_SEGS
+        self.task_description = _TASKS.GET_MOTION_SEGS
         frame_per_second: str = FPRenderTasks().frame_per_s(self.input_file).render()
-        _defalut_output_kwargs: FFKwargs = {
+        _default_output_kwargs: FFKwargs = {
             "vf": f"select='not(mod(n,floor({frame_per_second}*{self.sampling_duration})))*gte(scene,0)',metadata=print",
             "an": "",
             "loglevel": "info",
             "f": "null",
         }
         self.output_file = "-"
-        self.output_kwargs = _defalut_output_kwargs | self.output_kwargs
+        self.output_kwargs = _default_output_kwargs | self.output_kwargs
 
         def post_hook(_result):
             return _result.stdout.strip() + _result.stderr.strip()
@@ -1136,13 +1148,13 @@ class KeepOrRemove(FFCreateTask):
 
     def model_post_init(self, *args, **kwargs):
         """Initialize the task description and handle file paths."""
-        self.task_descripton = _TASKS.KEEP_OR_REMOVE
+        self.task_description = _TASKS.KEEP_OR_REMOVE
         # Handle input and output file path
         self.input_file = Path(self.input_file)
         self.output_file = _handle_output_file_path(
             self.input_file,
             self.output_file,
-            self.task_descripton,
+            self.task_description,
             self.valid_extensions,
         )
 
@@ -1156,7 +1168,7 @@ class KeepOrRemove(FFCreateTask):
             ERROR_CODE: In case of processing error
         """
         logger.info(
-            f"{self.task_descripton.capitalize()} {self.input_file} to {self.output_file} with {self.even_further = }, {self.odd_further = }."
+            f"{self.task_description.capitalize()} {self.input_file} to {self.output_file} with {self.even_further = }, {self.odd_further = }."
         )
 
         # Convert video segments to timestamps if needed
@@ -1243,7 +1255,7 @@ class KeepOrRemove(FFCreateTask):
 
         except Exception as e:
             logger.error(
-                f"Failed to {self.task_descripton} for {self.input_file}. Error: {e}"
+                f"Failed to {self.task_description} for {self.input_file}. Error: {e}"
             )
             raise e
 
@@ -1275,7 +1287,7 @@ class PartitionVideo(FFCreateTask):
         """
         Initialize the task description, handle file paths, and set default values.
         """
-        self.task_descripton = _TASKS.PARTITION
+        self.task_description = _TASKS.PARTITION
         # Handle input and output file path
         self.input_file = Path(self.input_file)
         if self.output_dir is None:
@@ -1340,7 +1352,7 @@ class PartitionVideo(FFCreateTask):
             [p[0] for p in self.portion_method],  # type: ignore
         )
         logger.info(
-            f"{self.task_descripton.capitalize()} {self.input_file.name} to {self.output_dir} with {self.portion_method}."  # type: ignore
+            f"{self.task_description.capitalize()} {self.input_file.name} to {self.output_dir} with {self.portion_method}."  # type: ignore
         )
 
         try:
@@ -1402,7 +1414,7 @@ class PartitionVideo(FFCreateTask):
                 self.output_file = _handle_output_file_path(
                     self.input_file,  # type: ignore
                     self.output_file,
-                    self.task_descripton,
+                    self.task_description,
                     self.valid_extensions,
                 )
                 Merge(
@@ -1415,7 +1427,7 @@ class PartitionVideo(FFCreateTask):
 
         except Exception as e:
             logger.error(
-                f"Failed to {self.task_descripton} for {self.input_file}. Error: {e}"
+                f"Failed to {self.task_description} for {self.input_file}. Error: {e}"
             )
             raise e
 
@@ -1448,13 +1460,13 @@ class CutSilence(FFCreateTask):
 
     def model_post_init(self, *args, **kwargs):
         """Initialize the task description and handle file paths."""
-        self.task_descripton = f"{_TASKS.CUT_SILENCE}_by_{self.dB}"
+        self.task_description = f"{_TASKS.CUT_SILENCE}_by_{self.dB}"
         # Handle input and output file path
         self.input_file = Path(self.input_file)
         self.output_file = _handle_output_file_path(
             self.input_file,
             self.output_file,
-            self.task_descripton,
+            self.task_description,
             self.valid_extensions,
         )
 
@@ -1468,7 +1480,7 @@ class CutSilence(FFCreateTask):
             ERROR_CODE: In case of processing error
         """
         logger.info(
-            f"{self.task_descripton.capitalize()} {self.input_file} to {self.output_file} with {self.dB = }, {self.sampling_duration = }, {self.seg_min_duration = }."
+            f"{self.task_description.capitalize()} {self.input_file} to {self.output_file} with {self.dB = }, {self.sampling_duration = }, {self.seg_min_duration = }."
         )
 
         # Extract non-silence segments
@@ -1513,7 +1525,7 @@ class CutSilence(FFCreateTask):
 
         except Exception as e:
             logger.error(
-                f"Failed to {self.task_descripton} for {self.input_file}. Error: {e}"
+                f"Failed to {self.task_description} for {self.input_file}. Error: {e}"
             )
             raise e
 
@@ -1546,13 +1558,13 @@ class CutMotionless(FFCreateTask):
 
     def model_post_init(self, *args, **kwargs):
         """Initialize the task description and handle file paths."""
-        self.task_descripton = f"{_TASKS.CUT_MOTIONLESS}_by_{self.threshold}"
+        self.task_description = f"{_TASKS.CUT_MOTIONLESS}_by_{self.threshold}"
         # Handle input and output file path
         self.input_file = Path(self.input_file)
         self.output_file = _handle_output_file_path(
             self.input_file,
             self.output_file,
-            self.task_descripton,
+            self.task_description,
             self.valid_extensions,
         )
 
@@ -1566,7 +1578,7 @@ class CutMotionless(FFCreateTask):
             ERROR_CODE: In case of processing error
         """
         logger.info(
-            f"{self.task_descripton.capitalize()} {self.input_file} to {self.output_file} with {self.threshold = }, {self.sampling_duration = }, {self.seg_min_duration = }."
+            f"{self.task_description.capitalize()} {self.input_file} to {self.output_file} with {self.threshold = }, {self.sampling_duration = }, {self.seg_min_duration = }."
         )
 
         # Extract motion segments
@@ -1611,7 +1623,7 @@ class CutMotionless(FFCreateTask):
 
         except Exception as e:
             logger.error(
-                f"Failed to {self.task_descripton} for {self.input_file}. Error: {e}"
+                f"Failed to {self.task_description} for {self.input_file}. Error: {e}"
             )
             raise e
 
@@ -1642,7 +1654,7 @@ def _get_segments_from_parts_count(
 
     if portion is None:
         portion = [1] * parts_count
-    # Error hadling
+    # Error handling
     if sum(portion) != parts_count:
         raise ValueError(
             f"Sum of portions ({sum(portion)}) must equal to parts_count ({parts_count})"
