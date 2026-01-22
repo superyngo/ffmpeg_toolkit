@@ -733,3 +733,8 @@ class BatchTask(BaseModel):
             if self.post_hook:
                 logger.info("Post hooking...")
                 self.post_hook(video, output_file)
+
+
+# Rebuild Pydantic models to ensure forward references are resolved
+CutByDetection.model_rebuild()
+CutByDetection.model_rebuild()

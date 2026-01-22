@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 FFmpeg Toolkit Core Module.
 
@@ -2727,5 +2729,6 @@ def _create_cut_sl_kwargs(
 # Rebuild Pydantic models to resolve forward references
 CutSilence.model_rebuild()
 CutMotionless.model_rebuild()
+CutByDetection.model_rebuild()
 KeepOrRemove.model_rebuild()
 PartitionVideo.model_rebuild()

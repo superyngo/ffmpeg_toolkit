@@ -4,7 +4,7 @@ from .ffmpeg_toolkit_core import FPRenderTasks, SegmentOperation
 from .ffmpeg_toolkit import FF_TASKS, PARTIAL_TASKS, BatchTask
 from . import ffmpeg_types as types
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 PACKAGE_NAME = "ffmpeg_converter"
 
 # Set custom paths for ffmpeg and ffprobe executables
