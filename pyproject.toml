@@ -1,6 +1,6 @@
 [project]
 name = "ffmpeg-toolkit"
-version = "0.4.0"
+version = "0.4.1"
 description = "A comprehensive Python toolkit for video processing using FFmpeg"
 readme = "README.md"
 requires-python = ">=3.13"

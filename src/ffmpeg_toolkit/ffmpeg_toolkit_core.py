@@ -2607,10 +2607,8 @@ def _extract_motion_segments(
             break_points.append(_time)
             prev_above = current_above
 
-    # Build final segment list: [0.0, transitions..., total_duration]
-    # Similar to _extract_non_silence_info's approach
+    # Build base segment list: [0.0, transitions..., total_duration]
     motion_segments = [0.0] + break_points
-
     if total_duration is not None:
         motion_segments.append(total_duration)
 
@@ -2622,6 +2620,14 @@ def _extract_motion_segments(
     # This ensures: even intervals = motion, odd intervals = motionless
     if not starts_with_motion:
         motion_segments = [0.0] + motion_segments
+
+    # Defensive check: ensure even length (pairs of start/end times)
+    # If odd, we need to adjust by appending the last value again
+    if len(motion_segments) % 2 != 0:
+        if total_duration is not None:
+            motion_segments.append(total_duration)
+        else:
+            motion_segments.append(motion_segments[-1] if motion_segments else 0.0)
 
     return motion_segments
 
