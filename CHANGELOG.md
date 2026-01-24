@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **2026-01-24**: Fixed critical motion detection semantics bug in segment set operations
+  - `_extract_motion_segments()` now returns segment boundaries with consistent semantics:
+    - Even-indexed intervals (0-1, 2-3, ...) represent MOTION segments (to keep)
+    - Odd-indexed intervals (1-2, 3-4, ...) represent MOTIONLESS segments (to remove)
+  - This aligns with `_extract_non_silence_info()` format where even intervals = sound (keep)
+  - Updated `CutMotionless` class: swapped `even_further` and `odd_further` default values
+  - Updated `CutByDetection`: removed manual segment boundary padding (now handled in `_extract_motion_segments`)
+  - Updated `_create_cut_motionless_kwargs()`: removed manual boundary padding
+  - Added `total_duration` parameter to `_extract_motion_segments()` for proper boundary handling
+  - Updated test expectations in `test_ffmpeg_toolkit.py::test_extract_motion_segments`
+  - **Impact**: This fixes incorrect behavior in set operations (UNION, INTERSECTION, etc.) that previously combined sound and motion segments with opposite semantic meanings
+
 ## [0.3.0] - 2026-01-17
 
 ### Added

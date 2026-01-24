@@ -1568,18 +1568,18 @@ class CutMotionless(FFCreateTask):
         threshold: Scene change threshold for identifying motion
         sampling_duration: Duration between motion samples
         seg_min_duration: Minimum duration of segments to keep
-        even_further: Processing method for even segments (typically motionless)
-        odd_further: Processing method for odd segments (typically motion)
+        even_further: Processing method for even segments (motion segments)
+        odd_further: Processing method for odd segments (motionless segments)
     """
 
     threshold: float = DEFAULTS.motionless_threshold.value
     sampling_duration: float = DEFAULTS.sampling_duration.value
     seg_min_duration: float = DEFAULTS.seg_min_duration.value
     even_further: FurtherMethod = (
-        "remove"  # For other segments, remove means remove, None means copy
+        None  # Even intervals = motion segments (keep by default)
     )
     odd_further: FurtherMethod = (
-        None  # For segments, remove means remove, None means copy
+        "remove"  # Odd intervals = motionless segments (remove by default)
     )
 
     def model_post_init(self, *args, **kwargs):
@@ -1615,7 +1615,7 @@ class CutMotionless(FFCreateTask):
             ).render()
         )
         motion_info, total_duration = _extract_motion_info(motion_str)
-        motion_segments = _extract_motion_segments(motion_info, self.threshold)
+        motion_segments = _extract_motion_segments(motion_info, self.threshold, total_duration)
         if motion_segments == [0.0]:
             logger.error(f"No valid segments found for {self.input_file}.")
             return ERROR_CODE.NO_VALID_SEGMENTS
@@ -1800,13 +1800,7 @@ class CutByDetection(FFCreateTask):
             ).render()
         )
         motion_info, _ = _extract_motion_info(motion_str)
-        motion_segments = _extract_motion_segments(motion_info, self.motion_threshold)
-
-        # Ensure motion segments start from 0 and end at total_duration
-        if motion_segments and motion_segments[0] != 0.0:
-            motion_segments = [0.0] + motion_segments
-        if motion_segments and motion_segments[-1] != total_duration:
-            motion_segments = motion_segments + [total_duration]
+        motion_segments = _extract_motion_segments(motion_info, self.motion_threshold, total_duration)
 
         # Step 3: Apply set operation
         combined_segments = self._apply_operation(
@@ -2569,29 +2563,67 @@ def _extract_motion_info(
 def _extract_motion_segments(
     motion_info: dict[float, float],
     threshold: float = DEFAULTS.motionless_threshold.value,
+    total_duration: float | None = None,
 ) -> list[float]:
-    """Extract timestamps of transitions between motion and motionless segments.
+    """Extract motion segment boundaries from scene score data.
 
-    This function analyzes motion scores to identify when the video
-    transitions between motion and motionless states, based on a threshold.
+    This function analyzes motion scores to identify segments with motion,
+    returning boundaries in a format consistent with silence detection:
+    - Even-indexed intervals (0-1, 2-3, ...) represent MOTION segments (to keep)
+    - Odd-indexed intervals (1-2, 3-4, ...) represent MOTIONLESS segments (to remove)
+
+    The output always starts with 0.0 and ends with total_duration, ensuring
+    complete coverage of the video timeline.
 
     Args:
         motion_info: Dictionary mapping timestamps to scene scores
         threshold: Scene score threshold for detecting motion
+        total_duration: Total duration of the video (required for proper boundaries)
 
     Returns:
-        List of timestamps marking transitions between motion and motionless segments
+        List of segment boundaries [0.0, t1, t2, ..., total_duration] where:
+        - Intervals at even indices contain motion
+        - Intervals at odd indices are motionless
     """
+    if not motion_info:
+        if total_duration is not None:
+            # No motion data: entire video is motionless
+            # Return [0.0, 0.0, total_duration, total_duration]
+            # Even interval [0,0] = empty motion, odd interval [0, total] = all motionless
+            return [0.0, 0.0, total_duration, total_duration]
+        return [0.0]
+
+    # Collect state transition points
     break_points = []
-    prev_above = False  # Track if last added was above the threshold
+    prev_above = None
 
     for _time, score in motion_info.items():
-        if (score > threshold and not prev_above) or (
-            score <= threshold and prev_above
-        ):
+        current_above = score > threshold
+        if prev_above is None:
+            # First frame: determine initial state
+            prev_above = current_above
+        elif current_above != prev_above:
+            # State transition detected
             break_points.append(_time)
-            prev_above = score > threshold  # Update the flag
-    return break_points
+            prev_above = current_above
+
+    # Build final segment list: [0.0, transitions..., total_duration]
+    # Similar to _extract_non_silence_info's approach
+    motion_segments = [0.0] + break_points
+
+    if total_duration is not None:
+        motion_segments.append(total_duration)
+
+    # Check if video starts with motionless state
+    first_score = next(iter(motion_info.values()))
+    starts_with_motion = first_score > threshold
+
+    # If starts with motionless, prepend 0.0 to make first interval odd-indexed
+    # This ensures: even intervals = motion, odd intervals = motionless
+    if not starts_with_motion:
+        motion_segments = [0.0] + motion_segments
+
+    return motion_segments
 
 
 def _create_cut_motionless_kwargs(
@@ -2619,14 +2651,11 @@ def _create_cut_motionless_kwargs(
         ).render()
     )
     motion_info, total_duration = _extract_motion_info(motion_str)
-    motion_segs = _extract_motion_segments(motion_info, threshold)
+    motion_segs = _extract_motion_segments(motion_info, threshold, total_duration)
 
     if len(motion_segs) == 0:
         logger.error(f"No valid segments found for {input_file}.")
         raise ValueError
-
-    if len(motion_segs) % 2 == 1:
-        motion_segs.append(total_duration)
 
     video_filter_script: Path = _create_cut_segs_filter_tempfile(
         CSFiltersInfo.VIDEO, motion_segs

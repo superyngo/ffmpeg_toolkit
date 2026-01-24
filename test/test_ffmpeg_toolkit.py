@@ -334,13 +334,25 @@ lavfi.scene_score=0.002
             6.0: 0.001,
         }
         threshold = 0.01
-        result = _extract_motion_segments(motion_info, threshold)
+        total_duration = 7.0
+        result = _extract_motion_segments(motion_info, threshold, total_duration)
 
-        # Should have breakpoints where motion state changes
-        assert 2.0 in result  # Transition from low to high
-        assert 4.0 in result  # Transition from high to low
-        assert 5.0 in result  # Transition from low to high
-        assert 6.0 in result  # Transition from high to low
+        # New behavior: returns complete segment list [0.0, ..., total_duration]
+        # Even intervals = motion, odd intervals = motionless
+        # Video starts motionless (0.001 < 0.01), so prepend 0.0
+        # Expected: [0.0, 0.0, 2.0, 4.0, 5.0, 6.0, 7.0]
+        #   [0.0, 0.0] = empty motion (even index 0)
+        #   [0.0, 2.0] = motionless (odd index 1)
+        #   [2.0, 4.0] = motion (even index 2)
+        #   [4.0, 5.0] = motionless (odd index 3)
+        #   [5.0, 6.0] = motion (even index 4)
+        #   [6.0, 7.0] = motionless (odd index 5)
+        assert result[0] == 0.0  # Always starts with 0.0
+        assert result[-1] == total_duration  # Always ends with total_duration
+        assert 2.0 in result  # Transition from motionless to motion
+        assert 4.0 in result  # Transition from motion to motionless
+        assert 5.0 in result  # Transition from motionless to motion
+        assert 6.0 in result  # Transition from motion to motionless
 
 
 class TestVideoSuffix:
