@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-03-09
+
+### Added
+
+- Added hardware acceleration fallback for `_ffmpeg()` and `_ffprobe()`: when a command fails with `-hwaccel` set, automatically retries without hardware acceleration for improved compatibility on systems where hwaccel is unavailable or misconfigured
+
 ### Fixed
 
 - **2026-01-24**: Fixed critical motion detection semantics bug in segment set operations
