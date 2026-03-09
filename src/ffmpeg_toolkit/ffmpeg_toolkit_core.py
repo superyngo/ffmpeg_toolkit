@@ -344,6 +344,22 @@ def _ffmpeg(**ffkwargs) -> subprocess.CompletedProcess[str]:
         ) from e
     except subprocess.CalledProcessError as e:
         logger.error(f"Failed to execute FFmpeg. Error: {e}")
+        if "hwaccel" in ffkwargs:
+            logger.warning(
+                "FFmpeg failed with -hwaccel auto. Retrying without hardware acceleration..."
+            )
+            fallback_kwargs = {k: v for k, v in ffkwargs.items() if k != "hwaccel"}
+            fallback_command = ["ffmpeg"] + _dic_to_ffmpeg_kwargs(fallback_kwargs)
+            logger.info(f"Executing FFmpeg fallback command: {' '.join(str(a) for a in fallback_command)}")
+            try:
+                result = subprocess.run(
+                    fallback_command, capture_output=True, text=True, check=True, encoding="utf-8"
+                )
+                logger.info("FFmpeg fallback (without -hwaccel) succeeded.")
+                return result
+            except subprocess.CalledProcessError as fallback_e:
+                logger.error(f"FFmpeg fallback also failed. Error: {fallback_e}")
+                raise fallback_e
         raise e
 
 
@@ -375,6 +391,22 @@ def _ffprobe(**ffkwargs):
         ) from e
     except subprocess.CalledProcessError as e:
         logger.error(f"Failed to execute ffprobe. Error: {e}")
+        if "hwaccel" in ffkwargs:
+            logger.warning(
+                "ffprobe failed with -hwaccel auto. Retrying without hardware acceleration..."
+            )
+            fallback_kwargs = {k: v for k, v in ffkwargs.items() if k != "hwaccel"}
+            fallback_command = ["ffprobe"] + _dic_to_ffmpeg_kwargs(fallback_kwargs)
+            logger.info(f"Executing ffprobe fallback command: {' '.join(str(a) for a in fallback_command)}")
+            try:
+                result = subprocess.run(
+                    fallback_command, capture_output=True, text=True, check=True, encoding="utf-8"
+                )
+                logger.info("ffprobe fallback (without -hwaccel) succeeded.")
+                return result
+            except subprocess.CalledProcessError as fallback_e:
+                logger.error(f"ffprobe fallback also failed. Error: {fallback_e}")
+                raise fallback_e
         raise e
 
 

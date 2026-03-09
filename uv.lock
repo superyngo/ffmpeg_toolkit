@@ -83,7 +83,7 @@ wheels = [
 
 [[package]]
 name = "ffmpeg-toolkit"
-version = "0.2.2"
+version = "0.4.1"
 source = { editable = "." }
 dependencies = [
     { name = "pydantic" },
