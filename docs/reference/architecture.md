@@ -732,7 +732,11 @@ ffmpeg_toolkit/
 |       +-- ffmpeg_types.py       # Type definitions
 +-- test/
 |   +-- test.py                   # Test examples
-+-- README.MD                     # User documentation
-+-- ARCHITECTURE.md               # This file
+|   +-- conftest.py               # Shared fixtures
+|   +-- test_ffmpeg_toolkit.py    # Unit tests (mocked FFmpeg/FFprobe)
++-- docs/                         # See CONTEXT.md
+|   +-- reference/architecture.md # This file
++-- README.md                     # User documentation
++-- CONTEXT.md                    # Documentation entry point
 +-- CHANGELOG.md                  # Version history
 ```

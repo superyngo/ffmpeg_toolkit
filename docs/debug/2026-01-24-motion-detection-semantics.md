@@ -1,4 +1,5 @@
 # Motion Detection Semantics Fix - Technical Report
+Status: Resolved (2026-01-24)
 
 ## 問題概述
 

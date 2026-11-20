@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 2026-11-20
+
+- docs: rename `README.MD` → `README.md` (fixes `readme = "README.md"` on case-sensitive builds; `setup.py`, `MANIFEST.in` updated)
+- docs: add documentation skeleton (`CONTEXT.md`, `docs/` folders, glossary, backlog, ADR 0001 on the Chinese debug record); move `ARCHITECTURE.md`, `PORTING_GUIDE.md`, `ffmpeg_help.md` to `docs/reference/` and `MOTION_DETECTION_FIX.md` to `docs/debug/2026-01-24-motion-detection-semantics.md`
+- docs: `.github/copilot-instructions.md` links to the reference docs instead of restating them
+
 ## [0.5.0] - 2026-03-09
 
 ### Added
@@ -26,6 +32,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added `total_duration` parameter to `_extract_motion_segments()` for proper boundary handling
   - Updated test expectations in `test_ffmpeg_toolkit.py::test_extract_motion_segments`
   - **Impact**: This fixes incorrect behavior in set operations (UNION, INTERSECTION, etc.) that previously combined sound and motion segments with opposite semantic meanings
+
+## [0.4.0] - 2026-01-24
+
+### Fixed
+
+- Motion detection segment semantics now match silence detection (even intervals = keep); see the 2026-01-24 entry under [0.5.0] and `docs/debug/2026-01-24-motion-detection-semantics.md` (`8ba3d01`)
+
+## [0.3.1] - 2026-01-22
+
+### Fixed
+
+- Pydantic: added `CutByDetection.model_rebuild()` and `from __future__ import annotations` so the model resolves its forward references (`918ad92`)
 
 ## [0.3.0] - 2026-01-17
 

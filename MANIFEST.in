@@ -1,4 +1,4 @@
-include README.MD
+include README.md
 include CHANGELOG.md
 include LICENSE
 exclude bin/*
